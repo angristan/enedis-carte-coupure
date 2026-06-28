@@ -33,7 +33,7 @@ Navigateur
 
 Prérequis:
 
-- Go 1.24+
+- Go 1.22+
 - Redis, optionnel mais recommandé
 
 Dans un terminal:
