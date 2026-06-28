@@ -15,6 +15,7 @@ L’interface Enedis affiche bien les incidents, mais sa carte ne rend pas toute
 - Cache Redis pour les géocodages et l’index OSM.
 - Fallback fichier local si Redis n’est pas disponible.
 - Backend Go sans framework, frontend HTML/CSS/JS simple.
+- Image Docker multi-stage pour le déploiement.
 
 ## Aperçu technique
 
@@ -87,7 +88,7 @@ Les mêmes paramètres peuvent être passés à `/api/outages` pour tester une a
 
 Le repo contient:
 
-- `nixpacks.toml` pour builder `./bin/enedis-carte-coupure`.
+- `Dockerfile` pour builder et lancer le serveur Go.
 - `railway.json` pour le healthcheck `/api/health`.
 
 Exemple:
@@ -104,6 +105,7 @@ Railway fournit `PORT` au service web et `REDIS_URL` au service Redis. Le serveu
 
 ```text
 cmd/server              point d’entrée HTTP
+Dockerfile              image Go/Alpine pour Railway ou Docker
 internal/cache          cache JSON Redis
 internal/enedis         client API Enedis
 internal/geocode        géocodeur avec cache Redis/fichier

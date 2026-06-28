@@ -1,5 +1,0 @@
-[phases.build]
-cmds = ["go build -o ./bin/enedis-carte-coupure ./cmd/server"]
-
-[start]
-cmd = "./bin/enedis-carte-coupure"

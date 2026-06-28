@@ -1,0 +1,9 @@
+.git
+.gocache
+.env
+bin
+cache/*.json
+coverage.out
+dist
+dump.rdb
+*.log
