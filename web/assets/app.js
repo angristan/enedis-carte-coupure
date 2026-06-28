@@ -47,6 +47,8 @@ const elements = {
   visibleCount: document.querySelector("#visibleCount"),
   updatedAt: document.querySelector("#updatedAt"),
   streetList: document.querySelector("#streetList"),
+  mapPane: document.querySelector(".map-pane"),
+  hoverLabel: document.querySelector("#hoverLabel"),
   template: document.querySelector("#streetItemTemplate"),
   searchInput: document.querySelector("#searchInput"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -66,6 +68,7 @@ const state = {
 
 window.addEventListener("resize", () => map.invalidateSize());
 map.on("zoomend", updateStreetStyles);
+map.on("movestart zoomstart popupopen", hideHoverLabel);
 elements.refreshButton.addEventListener("click", () => loadData({ force: true }));
 elements.searchInput.addEventListener("input", (event) => {
   state.query = event.target.value.trim().toLowerCase();
@@ -126,6 +129,7 @@ function renderStats() {
 
 function renderMap({ fitMap = false } = {}) {
   map.invalidateSize();
+  hideHoverLabel();
   outageLayer.clearLayers();
   polygonLayer.clearLayers();
   state.layerByKey.clear();
@@ -192,6 +196,7 @@ function focusStreet(street) {
 function selectStreet(street, { fit = false, openPopup = false, scrollList = true } = {}) {
   const entry = state.layerByKey.get(street.key);
   if (!entry) return;
+  hideHoverLabel();
   state.activeKey = street.key;
   updateStreetStyles();
   updateActiveListItem(scrollList);
@@ -224,6 +229,41 @@ function updateActiveListItem(scrollList = false) {
       item.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }
+}
+
+function showHoverLabel(street, event) {
+  if (!elements.hoverLabel || window.matchMedia("(pointer: coarse)").matches) return;
+  elements.hoverLabel.textContent = street.label;
+  elements.hoverLabel.hidden = false;
+  moveHoverLabel(event);
+}
+
+function moveHoverLabel(event) {
+  if (!elements.hoverLabel || elements.hoverLabel.hidden || !event) return;
+  const pointer = event.originalEvent || event;
+  if (!Number.isFinite(pointer.clientX) || !Number.isFinite(pointer.clientY)) return;
+
+  const paneRect = elements.mapPane.getBoundingClientRect();
+  const labelRect = elements.hoverLabel.getBoundingClientRect();
+  const margin = 10;
+  const x = clamp(
+    pointer.clientX - paneRect.left,
+    margin + labelRect.width / 2,
+    paneRect.width - margin - labelRect.width / 2,
+  );
+  const y = clamp(
+    pointer.clientY - paneRect.top,
+    margin + labelRect.height + 14,
+    paneRect.height - margin,
+  );
+
+  elements.hoverLabel.style.left = `${x}px`;
+  elements.hoverLabel.style.top = `${y}px`;
+}
+
+function hideHoverLabel() {
+  if (!elements.hoverLabel) return;
+  elements.hoverLabel.hidden = true;
 }
 
 function fitMapToBounds(bounds) {
@@ -287,7 +327,6 @@ function createGeometryEntry(street) {
       renderer: streetRenderer.hit,
     });
     hitArea.bindPopup(popupHtml(street));
-    hitArea.bindTooltip(street.label, { sticky: true, opacity: 0.9 });
     hitArea.addTo(group);
     hitAreas.push(hitArea);
     popupTarget ||= hitArea;
@@ -297,16 +336,20 @@ function createGeometryEntry(street) {
 
   const entry = { layer: group, popupTarget, bounds, street, casings, strokes, hitAreas, hovered: false };
   for (const hitArea of hitAreas) {
-    hitArea.on("mouseover", () => {
+    hitArea.on("mouseover", (event) => {
       entry.hovered = true;
       bringStreetToFront(entry);
       applyStreetStyle(entry);
+      showHoverLabel(street, event);
     });
+    hitArea.on("mousemove", moveHoverLabel);
     hitArea.on("mouseout", () => {
       entry.hovered = false;
       applyStreetStyle(entry);
+      hideHoverLabel();
     });
     hitArea.on("click", () => {
+      hideHoverLabel();
       selectStreet(street, { fit: false, openPopup: true, scrollList: true });
     });
   }
@@ -323,7 +366,10 @@ function createPointEntry(street) {
     weight: 3,
   });
   marker.bindPopup(popupHtml(street));
-  marker.bindTooltip(street.label, { direction: "top", offset: [0, -8], opacity: 0.9 });
+  marker.on("mouseover", (event) => showHoverLabel(street, event));
+  marker.on("mousemove", moveHoverLabel);
+  marker.on("mouseout", hideHoverLabel);
+  marker.on("click", hideHoverLabel);
   return {
     layer: marker,
     popupTarget: marker,
@@ -490,6 +536,11 @@ function cleanLine(line) {
 
 function pointsClose(a, b, tolerance) {
   return Math.abs(a[0] - b[0]) <= tolerance && Math.abs(a[1] - b[1]) <= tolerance;
+}
+
+function clamp(value, min, max) {
+  if (max < min) return value;
+  return Math.min(max, Math.max(min, value));
 }
 
 function detailText(street) {

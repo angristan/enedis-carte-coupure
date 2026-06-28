@@ -282,6 +282,28 @@ input {
   background: #dfe8e5;
 }
 
+.map-hover-label {
+  position: absolute;
+  z-index: 480;
+  max-width: min(320px, calc(100% - 28px));
+  padding: 7px 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(217, 225, 228, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(15, 32, 39, 0.18);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 12px));
+}
+
+.map-hover-label[hidden] {
+  display: none;
+}
+
 .topbar {
   position: absolute;
   top: 18px;
@@ -333,20 +355,43 @@ input {
 
 .actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
   pointer-events: auto;
 }
 
-.actions button {
+.actions button,
+.actions a {
   display: grid;
   width: 42px;
   height: 42px;
   place-items: center;
   color: var(--ink);
+  text-decoration: none;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
   cursor: pointer;
+}
+
+.actions svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.actions button:hover:not(:disabled),
+.actions a:hover {
+  color: var(--teal);
+  border-color: var(--teal);
+}
+
+.actions button:focus-visible,
+.actions a:focus-visible {
+  border-color: var(--teal);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--teal-soft), var(--shadow);
 }
 
 .actions button:disabled {
@@ -682,7 +727,8 @@ input {
     white-space: nowrap;
   }
 
-  .actions button {
+  .actions button,
+  .actions a {
     width: 38px;
     height: 38px;
   }
