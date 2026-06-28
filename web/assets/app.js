@@ -211,8 +211,30 @@ function updateActiveListItem(scrollList = false) {
     item.classList.toggle("active", active);
     item.setAttribute("aria-current", active ? "true" : "false");
     if (active && scrollList) {
-      item.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      scrollListItemIntoView(item);
     }
+  }
+}
+
+function scrollListItemIntoView(item) {
+  const container = elements.streetList;
+  const containerRect = container.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  const margin = 12;
+
+  if (itemRect.top < containerRect.top + margin) {
+    container.scrollTo({
+      top: container.scrollTop + itemRect.top - containerRect.top - margin,
+      behavior: "smooth",
+    });
+    return;
+  }
+
+  if (itemRect.bottom > containerRect.bottom - margin) {
+    container.scrollTo({
+      top: container.scrollTop + itemRect.bottom - containerRect.bottom + margin,
+      behavior: "smooth",
+    });
   }
 }
 
