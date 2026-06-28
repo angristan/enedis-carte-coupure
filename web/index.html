@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rues touchées Enedis</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQDBuN6Wm7tZa7gM2m4z7PIRrN1mtL8="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="map-pane" aria-label="Carte des rues touchées">
+        <div id="map"></div>
+        <div class="topbar">
+          <div class="brand">
+            <span class="pulse"></span>
+            <div>
+              <h1>Rues touchées Enedis</h1>
+              <p id="status">Chargement des données Enedis...</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="refreshButton" type="button" title="Rafraîchir">↻</button>
+          </div>
+        </div>
+        <div class="stats-strip" aria-live="polite">
+          <div>
+            <span id="streetCount">-</span>
+            <small>rues</small>
+          </div>
+          <div>
+            <span id="outageCount">-</span>
+            <small>coupures</small>
+          </div>
+          <div>
+            <span id="htaCount">-</span>
+            <small>HTA</small>
+          </div>
+          <div>
+            <span id="btCount">-</span>
+            <small>BT</small>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-pane">
+        <div class="search-block">
+          <label for="searchInput">Recherche</label>
+          <input id="searchInput" type="search" placeholder="Rue, arrondissement, incident" autocomplete="off" />
+        </div>
+        <div class="segmented" role="group" aria-label="Filtrer les coupures">
+          <button class="segment active" type="button" data-filter="all">Toutes</button>
+          <button class="segment" type="button" data-filter="Incident HTA">HTA</button>
+          <button class="segment" type="button" data-filter="Incident BT">BT</button>
+        </div>
+        <dl class="legend">
+          <div>
+            <dt>HTA</dt>
+            <dd>Incident sur le réseau moyenne tension, souvent plus large qu’une seule rue.</dd>
+          </div>
+          <div>
+            <dt>BT</dt>
+            <dd>Incident sur le réseau basse tension, plus localisé côté distribution finale.</dd>
+          </div>
+        </dl>
+        <div class="meta-row">
+          <span id="visibleCount">- rues visibles</span>
+          <span id="updatedAt">-</span>
+        </div>
+        <div id="streetList" class="street-list" aria-label="Liste des rues touchées"></div>
+      </aside>
+    </main>
+
+    <template id="streetItemTemplate">
+      <button class="street-item" type="button">
+        <span class="street-main">
+          <strong class="street-name"></strong>
+          <span class="street-detail"></span>
+        </span>
+        <span class="street-tags"></span>
+      </button>
+    </template>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/assets/app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+.DS_Store
+.env
+*.log
+.gocache/
+bin/
+cache/*.json
+coverage.out
+dist/
+dump.rdb
+enedis-carte-coupure
