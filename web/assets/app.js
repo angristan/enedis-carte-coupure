@@ -19,21 +19,11 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
 }).addTo(map);
 
-map.createPane("streetCasingPane");
-map.createPane("streetStrokePane");
-map.createPane("streetHitPane");
+map.createPane("streetPane");
 
-map.getPane("streetCasingPane").style.zIndex = 405;
-map.getPane("streetCasingPane").style.pointerEvents = "none";
-map.getPane("streetStrokePane").style.zIndex = 420;
-map.getPane("streetStrokePane").style.pointerEvents = "none";
-map.getPane("streetHitPane").style.zIndex = 430;
+map.getPane("streetPane").style.zIndex = 420;
 
-const streetRenderer = {
-  casing: L.svg({ pane: "streetCasingPane", padding: 0.35 }),
-  stroke: L.svg({ pane: "streetStrokePane", padding: 0.35 }),
-  hit: L.svg({ pane: "streetHitPane", padding: 0.35 }),
-};
+const streetRenderer = L.svg({ pane: "streetPane", padding: 0.45 });
 
 const outageLayer = L.layerGroup().addTo(map);
 const polygonLayer = L.layerGroup().addTo(map);
@@ -51,7 +41,6 @@ const elements = {
   hoverLabel: document.querySelector("#hoverLabel"),
   template: document.querySelector("#streetItemTemplate"),
   searchInput: document.querySelector("#searchInput"),
-  refreshButton: document.querySelector("#refreshButton"),
   filterButtons: [...document.querySelectorAll(".segment")],
 };
 
@@ -69,7 +58,6 @@ const state = {
 window.addEventListener("resize", () => map.invalidateSize());
 map.on("zoomend", updateStreetStyles);
 map.on("movestart zoomstart popupopen", hideHoverLabel);
-elements.refreshButton.addEventListener("click", () => loadData({ force: true }));
 elements.searchInput.addEventListener("input", (event) => {
   state.query = event.target.value.trim().toLowerCase();
   render();
@@ -85,14 +73,13 @@ for (const button of elements.filterButtons) {
 
 await loadData();
 
-async function loadData({ force = false } = {}) {
+async function loadData() {
   state.abortController?.abort();
   state.abortController = new AbortController();
-  elements.refreshButton.disabled = true;
-  elements.status.textContent = force ? "Rafraichissement..." : "Chargement des donnees Enedis...";
+  elements.status.textContent = "Chargement des donnees Enedis...";
 
   try {
-    const response = await fetch(`/api/outages${force ? `?t=${Date.now()}` : ""}`, {
+    const response = await fetch("/api/outages", {
       signal: state.abortController.signal,
       headers: { accept: "application/json" },
     });
@@ -105,8 +92,6 @@ async function loadData({ force = false } = {}) {
       elements.status.textContent = `Erreur: ${error.message}`;
       elements.streetList.innerHTML = "";
     }
-  } finally {
-    elements.refreshButton.disabled = false;
   }
 }
 
@@ -303,7 +288,7 @@ function createGeometryEntry(street) {
 
     const casing = L.polyline(coords, {
       ...streetCasingStyle(street),
-      renderer: streetRenderer.casing,
+      renderer: streetRenderer,
       interactive: false,
     });
     casing.addTo(group);
@@ -311,7 +296,7 @@ function createGeometryEntry(street) {
 
     const stroke = L.polyline(coords, {
       ...streetStrokeStyle(street),
-      renderer: streetRenderer.stroke,
+      renderer: streetRenderer,
       interactive: false,
     });
     stroke.addTo(group);
@@ -324,7 +309,7 @@ function createGeometryEntry(street) {
       opacity: 0.001,
       lineCap: "round",
       lineJoin: "round",
-      renderer: streetRenderer.hit,
+      renderer: streetRenderer,
     });
     hitArea.bindPopup(popupHtml(street));
     hitArea.addTo(group);
@@ -444,9 +429,7 @@ function markerRadius(street) {
 
 function lineWeight(street) {
   const count = street.outageIds?.length || 1;
-  const zoom = map.getZoom();
-  const zoomWeight = zoom <= 11 ? 2.6 : zoom <= 12 ? 3.2 : zoom <= 13 ? 4 : zoom <= 15 ? 5 : 6.2;
-  return Math.min(8.2, zoomWeight + Math.min(1.2, (count - 1) * 0.35));
+  return Math.min(6.6, 4.2 + Math.min(1.2, (count - 1) * 0.35));
 }
 
 function streetCasingStyle(street, emphasized = false) {

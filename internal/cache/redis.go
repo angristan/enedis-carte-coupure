@@ -15,6 +15,11 @@ type JSONStore interface {
 	Set(ctx context.Context, key string, value any) error
 }
 
+type TTLJSONStore interface {
+	JSONStore
+	SetTTL(ctx context.Context, key string, value any, ttl time.Duration) error
+}
+
 type RedisConfig struct {
 	URL      string
 	Addr     string
@@ -77,11 +82,15 @@ func (s *RedisJSONStore) Get(ctx context.Context, key string, destination any) (
 }
 
 func (s *RedisJSONStore) Set(ctx context.Context, key string, value any) error {
+	return s.SetTTL(ctx, key, value, 0)
+}
+
+func (s *RedisJSONStore) SetTTL(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	return s.client.Set(ctx, s.key(key), data, 0).Err()
+	return s.client.Set(ctx, s.key(key), data, ttl).Err()
 }
 
 func (s *RedisJSONStore) key(key string) string {

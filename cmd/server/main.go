@@ -27,6 +27,7 @@ func main() {
 	redisPassword := flag.String("redis-password", envString("REDIS_PASSWORD", ""), "Redis password")
 	redisDB := flag.Int("redis-db", envInt("REDIS_DB", 0), "Redis database index")
 	redisPrefix := flag.String("redis-prefix", envString("REDIS_PREFIX", "enedis-carte-coupure"), "Redis cache key prefix")
+	outageCacheTTL := 5 * time.Minute
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: 80 * time.Second}
@@ -34,6 +35,7 @@ func main() {
 
 	var geocodeCache appcache.JSONStore
 	var geometryCache appcache.JSONStore
+	var outageCache appcache.TTLJSONStore
 	if *redisURL != "" || *redisAddr != "" {
 		redisClient, err := appcache.NewRedisClient(context.Background(), appcache.RedisConfig{
 			URL:      *redisURL,
@@ -47,11 +49,18 @@ func main() {
 			defer redisClient.Close()
 			geocodeCache = appcache.NewRedisJSONStore(redisClient, *redisPrefix+":geocode")
 			geometryCache = appcache.NewRedisJSONStore(redisClient, *redisPrefix+":streetgeom")
+			outageCache = appcache.NewRedisJSONStore(redisClient, *redisPrefix+":outages")
 			log.Printf("cache backend: redis db=%d prefix=%s", *redisDB, *redisPrefix)
 		}
 	}
 	if geocodeCache == nil || geometryCache == nil {
 		log.Printf("cache backend: files geocode=%s geometry=%s", *cachePath, *geometryCachePath)
+	}
+	if outageCache == nil {
+		outageCache = appcache.NewMemoryTTLJSONStore()
+		log.Printf("outages cache backend: memory ttl=%s", outageCacheTTL)
+	} else {
+		log.Printf("outages cache backend: redis ttl=%s", outageCacheTTL)
 	}
 
 	geocoder := geocode.NewClient(httpClient, *cachePath, geocode.WithCache(geocodeCache))
@@ -59,11 +68,13 @@ func main() {
 	normalizer := outages.NewNormalizer(geocoder, geometries)
 
 	server := httpserver.New(httpserver.Config{
-		WebDir:     *webDir,
-		Enedis:     enedisClient,
-		Normalizer: normalizer,
-		Geocoder:   geocoder,
-		Geometries: geometries,
+		WebDir:         *webDir,
+		Enedis:         enedisClient,
+		Normalizer:     normalizer,
+		Geocoder:       geocoder,
+		Geometries:     geometries,
+		OutageCache:    outageCache,
+		OutageCacheTTL: outageCacheTTL,
 	})
 
 	log.Printf("listening on http://localhost%s", *addr)

@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"html"
 	"log"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	appcache "enedis-carte-coupure/internal/cache"
 	"enedis-carte-coupure/internal/enedis"
 	"enedis-carte-coupure/internal/geocode"
 	"enedis-carte-coupure/internal/outages"
@@ -16,11 +19,13 @@ import (
 )
 
 type Config struct {
-	WebDir     string
-	Enedis     *enedis.Client
-	Normalizer *outages.Normalizer
-	Geocoder   *geocode.Client
-	Geometries *streetgeom.Client
+	WebDir         string
+	Enedis         *enedis.Client
+	Normalizer     *outages.Normalizer
+	Geocoder       *geocode.Client
+	Geometries     *streetgeom.Client
+	OutageCache    appcache.TTLJSONStore
+	OutageCacheTTL time.Duration
 }
 
 func New(config Config) http.Handler {
@@ -44,6 +49,19 @@ func (s *server) outages(w http.ResponseWriter, r *http.Request) {
 	query := enedis.QueryFromValues(r.URL.Query())
 	includeRaw := r.URL.Query().Get("raw") == "1"
 	shouldGeocode := r.URL.Query().Get("geocode") != "0"
+	cacheKey := outageCacheKey(query, includeRaw, shouldGeocode)
+
+	if s.config.OutageCache != nil && s.config.OutageCacheTTL > 0 {
+		var cached outages.Response
+		found, err := s.config.OutageCache.Get(r.Context(), cacheKey, &cached)
+		if err != nil {
+			log.Printf("read outages cache: %v", err)
+		} else if found {
+			w.Header().Set("X-App-Cache", "HIT")
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+	}
 
 	rawBody, raw, err := s.config.Enedis.Fetch(r.Context(), query)
 	if err != nil {
@@ -69,7 +87,27 @@ func (s *server) outages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.config.OutageCache != nil && s.config.OutageCacheTTL > 0 {
+		if err := s.config.OutageCache.SetTTL(r.Context(), cacheKey, response, s.config.OutageCacheTTL); err != nil {
+			log.Printf("save outages cache: %v", err)
+		}
+	}
+	w.Header().Set("X-App-Cache", "MISS")
 	writeJSON(w, http.StatusOK, response)
+}
+
+func outageCacheKey(query enedis.Query, includeRaw bool, shouldGeocode bool) string {
+	payload, _ := json.Marshal(struct {
+		Query         enedis.Query `json:"query"`
+		IncludeRaw    bool         `json:"includeRaw"`
+		ShouldGeocode bool         `json:"shouldGeocode"`
+	}{
+		Query:         query,
+		IncludeRaw:    includeRaw,
+		ShouldGeocode: shouldGeocode,
+	})
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("outages:%x", sum)
 }
 
 func (s *server) static(w http.ResponseWriter, r *http.Request) {

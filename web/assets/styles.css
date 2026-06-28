@@ -441,6 +441,7 @@ input {
   min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
   padding: 18px;
   background: var(--panel);
   border-left: 1px solid var(--line);
@@ -538,7 +539,9 @@ input {
 
 .street-list {
   display: grid;
+  flex: 1 1 auto;
   min-height: 0;
+  align-content: start;
   gap: 8px;
   overflow: auto;
   padding-right: 3px;
@@ -653,8 +656,12 @@ input {
   border-radius: 8px;
 }
 
-.leaflet-streetHit-pane .street-hit-path {
+.leaflet-street-pane .street-hit-path {
   cursor: pointer;
+}
+
+.leaflet-street-pane {
+  will-change: transform;
 }
 
 .leaflet-control-attribution {
@@ -664,7 +671,7 @@ input {
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(360px, 56dvh) minmax(0, 44dvh);
+    grid-template-rows: minmax(320px, 48dvh) minmax(0, 52dvh);
     min-height: 100vh;
     min-height: 100dvh;
   }
@@ -699,7 +706,7 @@ input {
 
 @media (max-width: 560px) {
   .app-shell {
-    grid-template-rows: minmax(330px, 52dvh) minmax(0, 48dvh);
+    grid-template-rows: minmax(280px, 42dvh) minmax(0, 58dvh);
     min-height: 0;
   }
 
@@ -753,6 +760,7 @@ input {
   }
 
   .side-pane {
+    gap: 8px;
     padding: 10px;
   }
 
@@ -769,16 +777,17 @@ input {
   }
 
   .legend {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 8px;
+    display: flex;
+    gap: 8px;
+    padding: 7px 8px;
   }
 
   .legend div {
-    grid-template-columns: 32px minmax(0, 1fr);
+    display: block;
   }
 
   .legend dd {
-    font-size: 11px;
+    display: none;
   }
 
   .street-list {
@@ -786,7 +795,7 @@ input {
   }
 
   .street-item {
-    min-height: 58px;
+    min-height: 54px;
     padding: 9px;
   }
 
@@ -801,21 +810,11 @@ input {
 
 @media (max-width: 390px) {
   .app-shell {
-    grid-template-rows: minmax(310px, 50dvh) minmax(0, 50dvh);
+    grid-template-rows: minmax(240px, 40dvh) minmax(0, 60dvh);
   }
 
-  .brand p,
-  .legend dd {
+  .brand p {
     display: none;
-  }
-
-  .legend {
-    display: flex;
-    gap: 8px;
-  }
-
-  .legend div {
-    display: block;
   }
 
   .stats-strip {
