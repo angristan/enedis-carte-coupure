@@ -8,3 +8,4 @@ coverage.out
 dist/
 dump.rdb
 enedis-carte-coupure
+node_modules/

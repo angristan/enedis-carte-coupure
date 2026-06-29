@@ -12,6 +12,16 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/enedis-carte-coupure ./cmd/server
 
+FROM node:22-alpine AS frontend
+
+WORKDIR /src
+
+COPY package.json package-lock.json vite.config.js ./
+COPY frontend ./frontend
+
+RUN npm ci
+RUN npm run build
+
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata \
@@ -20,7 +30,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 
 COPY --from=build /out/enedis-carte-coupure /app/enedis-carte-coupure
-COPY web /app/web
+COPY --from=frontend /src/web /app/web
 
 RUN mkdir -p /app/cache \
   && chown -R app:app /app

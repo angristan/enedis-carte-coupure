@@ -30,6 +30,14 @@ type BoundedGeometryProvider interface {
 	StreetsInBounds(ctx context.Context, names []string, bounds geo.Bounds) map[string]streetgeom.Result
 }
 
+type PointAwareGeometryProvider interface {
+	StreetRequests(ctx context.Context, requests []streetgeom.Request) map[string]streetgeom.Result
+}
+
+type PointAwareBoundedGeometryProvider interface {
+	StreetRequestsInBounds(ctx context.Context, requests []streetgeom.Request, bounds geo.Bounds) map[string]streetgeom.Result
+}
+
 type Normalizer struct {
 	geocoder   Geocoder
 	geometries GeometryProvider
@@ -331,28 +339,52 @@ func (n *Normalizer) attachStreetGeometry(ctx context.Context, streets []Street,
 		return
 	}
 
-	names := make([]string, 0, len(streets))
+	requests := make([]streetgeom.Request, 0, len(streets))
 	for _, street := range streets {
-		names = append(names, street.NormalizedName)
+		request := streetgeom.Request{
+			ID:   street.Key,
+			Name: street.NormalizedName,
+		}
+		if street.Geocode != nil && street.Geocode.Status == "ok" {
+			request.Point = &streetgeom.Point{Lat: street.Geocode.Lat, Lng: street.Geocode.Lng}
+		}
+		requests = append(requests, request)
 	}
 
 	var results map[string]streetgeom.Result
 	if geometryBounds != nil {
-		if bounded, ok := n.geometries.(BoundedGeometryProvider); ok {
-			results = bounded.StreetsInBounds(ctx, names, *geometryBounds)
+		if bounded, ok := n.geometries.(PointAwareBoundedGeometryProvider); ok {
+			results = bounded.StreetRequestsInBounds(ctx, requests, *geometryBounds)
+		} else if bounded, ok := n.geometries.(BoundedGeometryProvider); ok {
+			results = bounded.StreetsInBounds(ctx, requestNames(requests), *geometryBounds)
 		}
 	}
 	if results == nil {
-		results = n.geometries.Streets(ctx, names)
+		if pointAware, ok := n.geometries.(PointAwareGeometryProvider); ok {
+			results = pointAware.StreetRequests(ctx, requests)
+		} else {
+			results = n.geometries.Streets(ctx, requestNames(requests))
+		}
 	}
 	for index := range streets {
-		key := streetgeom.Key(streets[index].NormalizedName)
-		result, ok := results[key]
+		result, ok := results[streets[index].Key]
+		if !ok {
+			key := streetgeom.Key(streets[index].NormalizedName)
+			result, ok = results[key]
+		}
 		if !ok {
 			continue
 		}
 		streets[index].Geometry = &result
 	}
+}
+
+func requestNames(requests []streetgeom.Request) []string {
+	names := make([]string, 0, len(requests))
+	for _, request := range requests {
+		names = append(names, request.Name)
+	}
+	return names
 }
 
 func parseLocalisation(localisation, fallbackCity string) parsedStreet {

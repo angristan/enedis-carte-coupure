@@ -14,7 +14,7 @@ L’interface Enedis affiche bien les incidents, mais sa carte ne rend pas toute
 - Vue mobile avec carte et liste en panneau bas.
 - Cache Redis stale-while-revalidate pour `/api/outages`, plus caches géocodage et index OSM.
 - Fallback fichier local si Redis n’est pas disponible.
-- Backend Go sans framework, frontend HTML/CSS/JS simple.
+- Backend Go sans framework, frontend React/Vite.
 - Image Docker multi-stage pour le déploiement.
 
 ## Aperçu technique
@@ -36,7 +36,14 @@ Navigateur
 Prérequis:
 
 - Go 1.22+
+- Node.js 22+ et npm
 - Redis, optionnel mais recommandé
+
+Installer les dépendances frontend une première fois:
+
+```sh
+npm ci
+```
 
 Dans un terminal:
 
@@ -51,6 +58,12 @@ make run
 ```
 
 Puis ouvrir [http://localhost:5177](http://localhost:5177).
+
+Pour travailler uniquement sur l’interface avec le serveur Go lancé à côté:
+
+```sh
+npm run dev
+```
 
 Sans Redis, l’application continue de fonctionner et écrit les caches dans `cache/*.json`.
 
@@ -118,7 +131,8 @@ internal/geocode        géocodeur avec cache Redis/fichier
 internal/httpserver     routes HTTP et fichiers statiques
 internal/outages        normalisation et déduplication des rues
 internal/streetgeom     géométrie des rues OSM avec cache Redis/fichier
-web/                    frontend Leaflet
+frontend/               source React/Vite
+web/                    frontend buildé servi par le serveur Go
 cache/                  caches locaux ignorés par git
 ```
 
@@ -127,7 +141,7 @@ cache/                  caches locaux ignorés par git
 - HTA signifie haute tension A, le réseau moyenne tension. Un incident HTA couvre souvent une zone plus large qu’une seule rue.
 - BT signifie basse tension. Un incident BT est souvent plus localisé côté distribution finale.
 - Certaines lignes Enedis sont des libellés techniques, pas de vraies rues. Elles restent visibles dans la liste même si aucune géométrie fiable n’est trouvée.
-- Le premier chargement peut être plus long: l’index des rues OSM est construit puis mis en cache. Les chargements suivants repartent de Redis ou du cache fichier, et la réponse `/api/outages` est réutilisée pendant 5 minutes.
+- Le premier chargement peut être plus long: l’index des rues OSM est construit puis mis en cache. Les chargements suivants repartent de Redis ou du cache fichier, et la réponse `/api/outages` peut être servie stale pendant qu’un rafraîchissement se fait en arrière-plan.
 
 ## Licence
 

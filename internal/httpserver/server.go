@@ -30,7 +30,7 @@ const (
 	maxViewportCommunes  = 30
 	maxEnedisConcurrency = 6
 	viewportCacheGridDeg = 0.01
-	cacheEntryVersion    = 1
+	cacheEntryVersion    = 2
 	refreshTimeout       = 3 * time.Minute
 	cacheWriteTimeout    = 10 * time.Second
 )

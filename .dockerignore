@@ -7,3 +7,4 @@ coverage.out
 dist
 dump.rdb
 *.log
+node_modules

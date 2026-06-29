@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,12 +21,15 @@ import (
 )
 
 const (
-	PrimaryEndpoint      = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
-	FallbackEndpoint     = "https://lz4.overpass-api.de/api/interpreter"
-	defaultIndexKey      = "paris"
-	viewportIndexPrefix  = "bounds:"
-	viewportPaddingRatio = 0.08
-	viewportSnapGrid     = 0.005
+	PrimaryEndpoint       = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+	FallbackEndpoint      = "https://lz4.overpass-api.de/api/interpreter"
+	defaultIndexKey       = "paris"
+	viewportIndexPrefix   = "bounds:"
+	viewportPaddingRatio  = 0.08
+	viewportSnapGrid      = 0.005
+	maxPointMatchMeters   = 1800
+	pointMatchSlackMeters = 350
+	componentJoinMeters   = 35
 )
 
 type Client struct {
@@ -41,6 +45,12 @@ type Client struct {
 type Point struct {
 	Lat float64 `json:"lat"`
 	Lng float64 `json:"lng"`
+}
+
+type Request struct {
+	ID    string
+	Name  string
+	Point *Point
 }
 
 type Result struct {
@@ -106,16 +116,24 @@ func NewClient(httpClient *http.Client, cachePath string, options ...Option) *Cl
 }
 
 func (c *Client) Streets(ctx context.Context, names []string) map[string]Result {
-	return c.streets(ctx, names, defaultBounds(), defaultIndexKey)
+	return c.StreetRequests(ctx, requestsFromNames(names))
 }
 
 func (c *Client) StreetsInBounds(ctx context.Context, names []string, bounds geo.Bounds) map[string]Result {
-	indexBounds := bounds.Padded(viewportPaddingRatio).Snapped(viewportSnapGrid)
-	return c.streets(ctx, names, indexBounds, viewportIndexPrefix+indexBounds.CacheKey())
+	return c.StreetRequestsInBounds(ctx, requestsFromNames(names), bounds)
 }
 
-func (c *Client) streets(ctx context.Context, names []string, bounds geo.Bounds, indexKey string) map[string]Result {
-	requested := requestedNames(names)
+func (c *Client) StreetRequests(ctx context.Context, requests []Request) map[string]Result {
+	return c.streetRequests(ctx, requests, defaultBounds(), defaultIndexKey)
+}
+
+func (c *Client) StreetRequestsInBounds(ctx context.Context, requests []Request, bounds geo.Bounds) map[string]Result {
+	indexBounds := bounds.Padded(viewportPaddingRatio).Snapped(viewportSnapGrid)
+	return c.streetRequests(ctx, requests, indexBounds, viewportIndexPrefix+indexBounds.CacheKey())
+}
+
+func (c *Client) streetRequests(ctx context.Context, requests []Request, bounds geo.Bounds, indexKey string) map[string]Result {
+	requested := requestedRequests(requests)
 	if len(requested) == 0 {
 		return map[string]Result{}
 	}
@@ -136,8 +154,8 @@ func (c *Client) streets(ctx context.Context, names []string, bounds geo.Bounds,
 	if len(missing) > 0 {
 		if err := c.refresh(ctx, bounds, indexKey); err != nil {
 			results := map[string]Result{}
-			for key, name := range requested {
-				results[key] = Result{Status: "error", Query: name, Message: err.Error()}
+			for key, request := range requested {
+				results[key] = Result{Status: "error", Query: request.Name, Message: err.Error()}
 			}
 			return results
 		}
@@ -150,19 +168,24 @@ func (c *Client) streets(ctx context.Context, names []string, bounds geo.Bounds,
 	if index.Streets == nil {
 		index = cacheFile{Bounds: bounds, Streets: map[string]Result{}}
 	}
-	for key, name := range requested {
-		result, ok := index.Streets[key]
+	for resultKey, request := range requested {
+		nameKey := Key(request.Name)
+		result, ok := index.Streets[nameKey]
 		if !ok {
 			result = Result{
 				Status:    "miss",
-				Query:     name,
+				Query:     request.Name,
 				UpdatedAt: index.UpdatedAt,
 			}
-			index.Streets[key] = result
+			index.Streets[nameKey] = result
 			c.dirty[indexKey] = struct{}{}
 		}
-		result.Query = name
-		results[key] = result
+		result.Query = request.Name
+		if request.Point != nil {
+			result = filterResultNearPoint(result, *request.Point)
+			result.Query = request.Name
+		}
+		results[resultKey] = result
 	}
 	c.indexes[indexKey] = index
 	return results
@@ -390,27 +413,199 @@ func defaultBounds() geo.Bounds {
 	return geo.Bounds{South: 48.815, West: 2.224, North: 48.902, East: 2.470}
 }
 
-func requestedNames(names []string) map[string]string {
-	requested := map[string]string{}
+func requestsFromNames(names []string) []Request {
+	requests := make([]Request, 0, len(names))
 	for _, name := range names {
-		cleaned := strings.TrimSpace(name)
-		key := Key(cleaned)
-		if key == "" {
+		requests = append(requests, Request{Name: name})
+	}
+	return requests
+}
+
+func requestedRequests(requests []Request) map[string]Request {
+	requested := map[string]Request{}
+	for _, request := range requests {
+		request.Name = strings.TrimSpace(request.Name)
+		nameKey := Key(request.Name)
+		if nameKey == "" {
 			continue
 		}
-		requested[key] = cleaned
+		resultKey := strings.TrimSpace(request.ID)
+		if resultKey == "" {
+			resultKey = nameKey
+		}
+		requested[resultKey] = request
 	}
 	return requested
 }
 
-func missingKeys(cache map[string]Result, requested map[string]string) []string {
+func missingKeys(cache map[string]Result, requested map[string]Request) []string {
+	seen := map[string]struct{}{}
 	missing := []string{}
-	for key := range requested {
-		if _, ok := cache[key]; !ok {
-			missing = append(missing, key)
+	for _, request := range requested {
+		nameKey := Key(request.Name)
+		if _, ok := seen[nameKey]; ok {
+			continue
+		}
+		seen[nameKey] = struct{}{}
+		if _, ok := cache[nameKey]; !ok {
+			missing = append(missing, nameKey)
 		}
 	}
 	return missing
+}
+
+func filterResultNearPoint(result Result, point Point) Result {
+	if result.Status != "ok" || len(result.Lines) == 0 {
+		return result
+	}
+
+	components := connectedComponents(result.Lines)
+	if len(components) == 0 {
+		return result
+	}
+
+	distances := make([]float64, len(components))
+	closest := math.Inf(1)
+	for index, component := range components {
+		distance := componentDistanceMeters(result.Lines, component, point)
+		distances[index] = distance
+		if distance < closest {
+			closest = distance
+		}
+	}
+	if math.IsInf(closest, 1) || closest > maxPointMatchMeters {
+		result.Status = "miss"
+		result.Lines = nil
+		result.Message = fmt.Sprintf("no OSM geometry named %q within %dm of geocoded point", result.Query, maxPointMatchMeters)
+		return result
+	}
+
+	limit := math.Min(maxPointMatchMeters, closest+pointMatchSlackMeters)
+	filtered := make([][]Point, 0, len(result.Lines))
+	for index, component := range components {
+		if distances[index] > limit {
+			continue
+		}
+		for _, lineIndex := range component {
+			filtered = append(filtered, result.Lines[lineIndex])
+		}
+	}
+	if len(filtered) == 0 {
+		return result
+	}
+	result.Lines = filtered
+	return result
+}
+
+func connectedComponents(lines [][]Point) [][]int {
+	visited := make([]bool, len(lines))
+	components := [][]int{}
+	for index := range lines {
+		if visited[index] {
+			continue
+		}
+		visited[index] = true
+		component := []int{index}
+		queue := []int{index}
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+			for candidate := range lines {
+				if visited[candidate] || !linesTouch(lines[current], lines[candidate]) {
+					continue
+				}
+				visited[candidate] = true
+				component = append(component, candidate)
+				queue = append(queue, candidate)
+			}
+		}
+		components = append(components, component)
+	}
+	return components
+}
+
+func linesTouch(left, right []Point) bool {
+	leftEndpoints, ok := endpoints(left)
+	if !ok {
+		return false
+	}
+	rightEndpoints, ok := endpoints(right)
+	if !ok {
+		return false
+	}
+	for _, leftPoint := range leftEndpoints {
+		for _, rightPoint := range rightEndpoints {
+			if pointDistanceMeters(leftPoint, rightPoint) <= componentJoinMeters {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func endpoints(line []Point) ([2]Point, bool) {
+	if len(line) == 0 {
+		return [2]Point{}, false
+	}
+	return [2]Point{line[0], line[len(line)-1]}, true
+}
+
+func componentDistanceMeters(lines [][]Point, component []int, point Point) float64 {
+	closest := math.Inf(1)
+	for _, lineIndex := range component {
+		distance := lineDistanceMeters(lines[lineIndex], point)
+		if distance < closest {
+			closest = distance
+		}
+	}
+	return closest
+}
+
+func lineDistanceMeters(line []Point, point Point) float64 {
+	if len(line) == 0 {
+		return math.Inf(1)
+	}
+	if len(line) == 1 {
+		return pointDistanceMeters(line[0], point)
+	}
+	closest := math.Inf(1)
+	for index := 1; index < len(line); index++ {
+		distance := segmentDistanceMeters(point, line[index-1], line[index])
+		if distance < closest {
+			closest = distance
+		}
+	}
+	return closest
+}
+
+func segmentDistanceMeters(point, start, end Point) float64 {
+	px, py := projectMeters(point, point.Lat)
+	sx, sy := projectMeters(start, point.Lat)
+	ex, ey := projectMeters(end, point.Lat)
+	dx := ex - sx
+	dy := ey - sy
+	if dx == 0 && dy == 0 {
+		return math.Hypot(px-sx, py-sy)
+	}
+	t := ((px-sx)*dx + (py-sy)*dy) / (dx*dx + dy*dy)
+	t = math.Max(0, math.Min(1, t))
+	x := sx + t*dx
+	y := sy + t*dy
+	return math.Hypot(px-x, py-y)
+}
+
+func pointDistanceMeters(left, right Point) float64 {
+	lx, ly := projectMeters(left, left.Lat)
+	rx, ry := projectMeters(right, left.Lat)
+	return math.Hypot(lx-rx, ly-ry)
+}
+
+func projectMeters(point Point, originLat float64) (float64, float64) {
+	const earthRadiusMeters = 6371000
+	latRad := point.Lat * math.Pi / 180
+	lngRad := point.Lng * math.Pi / 180
+	originLatRad := originLat * math.Pi / 180
+	return earthRadiusMeters * lngRad * math.Cos(originLatRad), earthRadiusMeters * latRad
 }
 
 func Key(value string) string {
