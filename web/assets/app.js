@@ -220,22 +220,13 @@ function scrollListItemIntoView(item) {
   const container = elements.streetList;
   const containerRect = container.getBoundingClientRect();
   const itemRect = item.getBoundingClientRect();
-  const margin = 12;
-
-  if (itemRect.top < containerRect.top + margin) {
-    container.scrollTo({
-      top: container.scrollTop + itemRect.top - containerRect.top - margin,
-      behavior: "smooth",
-    });
-    return;
-  }
-
-  if (itemRect.bottom > containerRect.bottom - margin) {
-    container.scrollTo({
-      top: container.scrollTop + itemRect.bottom - containerRect.bottom + margin,
-      behavior: "smooth",
-    });
-  }
+  const targetTop =
+    container.scrollTop + itemRect.top - containerRect.top - (container.clientHeight - itemRect.height) / 2;
+  const maxTop = container.scrollHeight - container.clientHeight;
+  container.scrollTo({
+    top: clamp(targetTop, 0, maxTop),
+    behavior: "smooth",
+  });
 }
 
 function showHoverLabel(street, event) {
