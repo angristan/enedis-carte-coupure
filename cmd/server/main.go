@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appcache "enedis-carte-coupure/internal/cache"
+	"enedis-carte-coupure/internal/communes"
 	"enedis-carte-coupure/internal/enedis"
 	"enedis-carte-coupure/internal/geocode"
 	"enedis-carte-coupure/internal/httpserver"
@@ -32,6 +33,7 @@ func main() {
 
 	httpClient := &http.Client{Timeout: 80 * time.Second}
 	enedisClient := enedis.NewClient(httpClient)
+	communeClient := communes.NewClient(httpClient)
 
 	var geocodeCache appcache.JSONStore
 	var geometryCache appcache.JSONStore
@@ -70,6 +72,7 @@ func main() {
 	server := httpserver.New(httpserver.Config{
 		WebDir:         *webDir,
 		Enedis:         enedisClient,
+		Communes:       communeClient,
 		Normalizer:     normalizer,
 		Geocoder:       geocoder,
 		Geometries:     geometries,

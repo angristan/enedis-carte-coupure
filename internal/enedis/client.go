@@ -33,13 +33,16 @@ type Client struct {
 }
 
 type Query struct {
-	Insee    string `json:"insee"`
-	Type     string `json:"type"`
-	Adresse  string `json:"adresse"`
-	CPVille  string `json:"CPVille"`
-	Name     string `json:"name"`
-	District string `json:"district"`
-	City     string `json:"city"`
+	Insee      string `json:"insee"`
+	Type       string `json:"type"`
+	Adresse    string `json:"adresse"`
+	CPVille    string `json:"CPVille"`
+	Name       string `json:"name"`
+	District   string `json:"district"`
+	City       string `json:"city"`
+	Longitude  string `json:"longitude,omitempty"`
+	Latitude   string `json:"latitude,omitempty"`
+	Department string `json:"department,omitempty"`
 }
 
 type Response struct {
@@ -103,6 +106,24 @@ func QueryFromValues(values url.Values) Query {
 	if values.Has("city") {
 		query.City = values.Get("city")
 	}
+	if values.Has("long") {
+		query.Longitude = values.Get("long")
+	}
+	if values.Has("longitude") {
+		query.Longitude = values.Get("longitude")
+	}
+	if values.Has("lat") {
+		query.Latitude = values.Get("lat")
+	}
+	if values.Has("latitude") {
+		query.Latitude = values.Get("latitude")
+	}
+	if values.Has("departement") {
+		query.Department = values.Get("departement")
+	}
+	if values.Has("department") {
+		query.Department = values.Get("department")
+	}
 	return query
 }
 
@@ -152,17 +173,24 @@ func resultURL(query Query) string {
 	params := ref.Query()
 	params.Set("adresse", query.Adresse)
 	params.Set("insee", query.Insee)
-	params.Set("long", defaultLong)
-	params.Set("lat", defaultLat)
+	params.Set("long", fallback(query.Longitude, defaultLong))
+	params.Set("lat", fallback(query.Latitude, defaultLat))
 	params.Set("type", query.Type)
 	params.Set("CPVille", query.CPVille)
 	params.Set("street", "")
 	params.Set("name", query.Name)
-	params.Set("departement", defaultDept)
+	params.Set("departement", fallback(query.Department, defaultDept))
 	params.Set("district", query.District)
 	params.Set("city", query.City)
 	ref.RawQuery = params.Encode()
 	return ref.String()
+}
+
+func fallback(value, fallbackValue string) string {
+	if value != "" {
+		return value
+	}
+	return fallbackValue
 }
 
 func min(a, b int) int {

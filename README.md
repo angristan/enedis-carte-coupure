@@ -6,7 +6,7 @@ L’interface Enedis affiche bien les incidents, mais sa carte ne rend pas toute
 
 ## Fonctionnalités
 
-- Carte interactive des rues touchées à Paris par défaut.
+- Carte interactive des rues touchées dans les communes visibles, Paris au chargement.
 - Surlignage des rues complètes avec géométries OpenStreetMap.
 - Rues cliquables sur la carte, popup et synchronisation avec la liste.
 - Couleurs par type d’incident: HTA en rouge, BT en orange.
@@ -24,7 +24,8 @@ Le navigateur ne peut pas appeler directement l’endpoint Enedis depuis `localh
 ```text
 Navigateur
   -> Go /api/outages
-    -> Enedis panne-interruption-ajax
+    -> geo.api.gouv.fr pour identifier les communes visibles
+    -> Enedis panne-interruption-ajax par commune
     -> IGN / api-adresse.data.gouv.fr pour les points de rues
     -> Overpass / OpenStreetMap pour les lignes de rues
     -> Redis pour les caches
@@ -74,6 +75,7 @@ curl 'http://localhost:5177/api/health'
 curl 'http://localhost:5177/api/outages'
 curl 'http://localhost:5177/api/outages?geocode=0'
 curl 'http://localhost:5177/api/outages?raw=1'
+curl 'http://localhost:5177/api/outages?south=48.815&west=2.224&north=48.902&east=2.470'
 ```
 
 Par défaut, la requête cible Paris:
@@ -83,6 +85,8 @@ insee=75056&type=municipality&adresse=Paris&CPVille=Paris 75001&name=Paris&city=
 ```
 
 Les mêmes paramètres peuvent être passés à `/api/outages` pour tester une autre commune, sous réserve que les données Enedis et la géométrie OSM soient disponibles.
+
+Quand `south`, `west`, `north` et `east` sont fournis, le serveur échantillonne la vue, résout les communes avec `geo.api.gouv.fr`, interroge Enedis pour chaque commune visible, puis utilise la bbox de la vue pour l’index OSM. Enedis restant une API à la commune, une vue qui traverse Paris récupère les coupures de Paris, pas uniquement les rues strictement dans le rectangle affiché.
 
 ## Déploiement Railway
 

@@ -53,10 +53,16 @@ const state = {
   activeKey: null,
   didFitInitialBounds: false,
   abortController: null,
+  loadTimer: null,
+  lastRequestKey: "",
 };
+
+const MIN_FETCH_ZOOM = 11;
+const FETCH_DEBOUNCE_MS = 450;
 
 window.addEventListener("resize", () => map.invalidateSize());
 map.on("zoomend", updateStreetStyles);
+map.on("moveend", scheduleViewportLoad);
 map.on("movestart zoomstart popupopen", hideHoverLabel);
 elements.searchInput.addEventListener("input", (event) => {
   state.query = event.target.value.trim().toLowerCase();
@@ -67,31 +73,88 @@ for (const button of elements.filterButtons) {
   button.addEventListener("click", () => {
     state.activeFilter = button.dataset.filter || "all";
     for (const item of elements.filterButtons) item.classList.toggle("active", item === button);
-    render({ fitMap: true });
+    render();
   });
 }
 
 await loadData();
 
 async function loadData() {
+  if (map.getZoom() < MIN_FETCH_ZOOM) {
+    state.abortController?.abort();
+    elements.status.textContent = "Zoomez pour charger les coupures dans la vue.";
+    clearResults();
+    return;
+  }
+
+  const request = viewportRequest();
+  if (!request) return;
+  if (request.key === state.lastRequestKey && state.data) return;
+  state.lastRequestKey = request.key;
+
   state.abortController?.abort();
   state.abortController = new AbortController();
-  elements.status.textContent = "Chargement des donnees Enedis...";
+  elements.status.textContent = "Chargement des coupures dans la vue...";
 
   try {
-    const response = await fetch("/api/outages", {
+    const response = await fetch(`/api/outages?${request.params}`, {
       signal: state.abortController.signal,
       headers: { accept: "application/json" },
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await errorMessage(response));
     state.data = await response.json();
     elements.status.textContent = buildStatusText(state.data);
-    render({ fitMap: true });
+    render();
   } catch (error) {
     if (error.name !== "AbortError") {
       elements.status.textContent = `Erreur: ${error.message}`;
-      elements.streetList.innerHTML = "";
+      clearResults();
     }
+  }
+}
+
+function clearResults() {
+  state.data = null;
+  state.layerByKey.clear();
+  state.itemByKey.clear();
+  outageLayer.clearLayers();
+  polygonLayer.clearLayers();
+  elements.streetList.innerHTML = "";
+  elements.streetCount.textContent = "0";
+  elements.outageCount.textContent = "0";
+  elements.htaCount.textContent = "0";
+  elements.btCount.textContent = "0";
+  elements.visibleCount.textContent = "0 rues visibles";
+  elements.updatedAt.textContent = "-";
+}
+
+function scheduleViewportLoad() {
+  window.clearTimeout(state.loadTimer);
+  state.loadTimer = window.setTimeout(() => loadData(), FETCH_DEBOUNCE_MS);
+}
+
+function viewportRequest() {
+  const bounds = map.getBounds();
+  if (!bounds?.isValid()) return null;
+
+  const params = new URLSearchParams();
+  params.set("south", bounds.getSouth().toFixed(6));
+  params.set("west", bounds.getWest().toFixed(6));
+  params.set("north", bounds.getNorth().toFixed(6));
+  params.set("east", bounds.getEast().toFixed(6));
+
+  return {
+    params,
+    key: params.toString(),
+  };
+}
+
+async function errorMessage(response) {
+  try {
+    const payload = await response.json();
+    return payload.message || payload.error || `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
   }
 }
 
@@ -141,10 +204,10 @@ function renderMap({ fitMap = false } = {}) {
     bounds.push(...entry.bounds);
   }
 
-  if (fitMap || !state.didFitInitialBounds) {
+  if (fitMap) {
     fitMapToBounds(bounds);
-    state.didFitInitialBounds = true;
   }
+  state.didFitInitialBounds = true;
   requestAnimationFrame(() => {
     map.invalidateSize();
     updateStreetStyles();
@@ -566,11 +629,13 @@ function tagHtml(type) {
 
 function buildStatusText(data) {
   const stats = data.stats || {};
-  if (!stats.streets) return "Aucune rue touchee remontee par Enedis pour cette recherche.";
+  const communeCount = data.communes?.length || data.queries?.length || 0;
+  const suffix = communeCount > 1 ? ` dans ${formatNumber(communeCount)} communes` : "";
+  if (!stats.streets) return `Aucune rue touchee remontee par Enedis dans les communes visibles${suffix}.`;
   if (stats.streetGeometry) {
-    return `${formatNumber(stats.streetGeometry)} rues surlignees sur ${formatNumber(stats.streets)} rues remontees par Enedis`;
+    return `${formatNumber(stats.streetGeometry)} rues surlignees sur ${formatNumber(stats.streets)} rues remontees par Enedis${suffix}`;
   }
-  return `${formatNumber(stats.geocodedStreets)} rues placees sur ${formatNumber(stats.streets)} rues remontees par Enedis`;
+  return `${formatNumber(stats.geocodedStreets)} rues placees sur ${formatNumber(stats.streets)} rues remontees par Enedis${suffix}`;
 }
 
 function formatNumber(value) {

@@ -16,24 +16,26 @@ import (
 	"time"
 
 	"enedis-carte-coupure/internal/cache"
+	"enedis-carte-coupure/internal/geo"
 )
 
 const (
-	PrimaryEndpoint  = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
-	FallbackEndpoint = "https://lz4.overpass-api.de/api/interpreter"
-	ParisBBox        = "48.815,2.224,48.902,2.470"
+	PrimaryEndpoint      = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+	FallbackEndpoint     = "https://lz4.overpass-api.de/api/interpreter"
+	defaultIndexKey      = "paris"
+	viewportIndexPrefix  = "bounds:"
+	viewportPaddingRatio = 0.08
+	viewportSnapGrid     = 0.005
 )
 
 type Client struct {
 	httpClient  *http.Client
 	cachePath   string
 	cacheStore  cache.JSONStore
-	cache       map[string]Result
-	source      string
-	updatedAt   string
-	loadedRedis bool
+	indexes     map[string]cacheFile
+	loadedRedis map[string]bool
 	mu          sync.Mutex
-	dirty       bool
+	dirty       map[string]struct{}
 }
 
 type Point struct {
@@ -54,7 +56,13 @@ type Result struct {
 type cacheFile struct {
 	UpdatedAt string            `json:"updatedAt"`
 	Source    string            `json:"source"`
+	Bounds    geo.Bounds        `json:"bounds"`
 	Streets   map[string]Result `json:"streets"`
+}
+
+type diskCacheFile struct {
+	Version int                  `json:"version"`
+	Indexes map[string]cacheFile `json:"indexes"`
 }
 
 type overpassResponse struct {
@@ -79,39 +87,54 @@ func WithCache(store cache.JSONStore) Option {
 
 func NewClient(httpClient *http.Client, cachePath string, options ...Option) *Client {
 	client := &Client{
-		httpClient: httpClient,
-		cachePath:  cachePath,
-		cache:      map[string]Result{},
+		httpClient:  httpClient,
+		cachePath:   cachePath,
+		indexes:     map[string]cacheFile{},
+		loadedRedis: map[string]bool{},
+		dirty:       map[string]struct{}{},
 	}
 	for _, option := range options {
 		option(client)
 	}
 	client.load()
-	if client.cacheStore != nil && len(client.cache) > 0 {
-		client.dirty = true
+	if client.cacheStore != nil && len(client.indexes) > 0 {
+		for key := range client.indexes {
+			client.dirty[key] = struct{}{}
+		}
 	}
 	return client
 }
 
 func (c *Client) Streets(ctx context.Context, names []string) map[string]Result {
+	return c.streets(ctx, names, defaultBounds(), defaultIndexKey)
+}
+
+func (c *Client) StreetsInBounds(ctx context.Context, names []string, bounds geo.Bounds) map[string]Result {
+	indexBounds := bounds.Padded(viewportPaddingRatio).Snapped(viewportSnapGrid)
+	return c.streets(ctx, names, indexBounds, viewportIndexPrefix+indexBounds.CacheKey())
+}
+
+func (c *Client) streets(ctx context.Context, names []string, bounds geo.Bounds, indexKey string) map[string]Result {
 	requested := requestedNames(names)
 	if len(requested) == 0 {
 		return map[string]Result{}
 	}
 
 	c.mu.Lock()
-	missing := missingKeys(c.cache, requested)
+	index := c.indexes[indexKey]
+	missing := missingKeys(index.Streets, requested)
 	c.mu.Unlock()
 
 	if len(missing) > 0 && c.cacheStore != nil {
-		_ = c.loadRedis(ctx)
+		_ = c.loadRedis(ctx, indexKey)
 		c.mu.Lock()
-		missing = missingKeys(c.cache, requested)
+		index = c.indexes[indexKey]
+		missing = missingKeys(index.Streets, requested)
 		c.mu.Unlock()
 	}
 
 	if len(missing) > 0 {
-		if err := c.refresh(ctx); err != nil {
+		if err := c.refresh(ctx, bounds, indexKey); err != nil {
 			results := map[string]Result{}
 			for key, name := range requested {
 				results[key] = Result{Status: "error", Query: name, Message: err.Error()}
@@ -123,20 +146,25 @@ func (c *Client) Streets(ctx context.Context, names []string) map[string]Result 
 	results := map[string]Result{}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	index = c.indexes[indexKey]
+	if index.Streets == nil {
+		index = cacheFile{Bounds: bounds, Streets: map[string]Result{}}
+	}
 	for key, name := range requested {
-		result, ok := c.cache[key]
+		result, ok := index.Streets[key]
 		if !ok {
 			result = Result{
 				Status:    "miss",
 				Query:     name,
-				UpdatedAt: c.updatedAt,
+				UpdatedAt: index.UpdatedAt,
 			}
-			c.cache[key] = result
-			c.dirty = true
+			index.Streets[key] = result
+			c.dirty[indexKey] = struct{}{}
 		}
 		result.Query = name
 		results[key] = result
 	}
+	c.indexes[indexKey] = index
 	return results
 }
 
@@ -146,21 +174,23 @@ func (c *Client) Save() error {
 	}
 
 	c.mu.Lock()
-	if !c.dirty {
+	if len(c.dirty) == 0 {
 		c.mu.Unlock()
 		return nil
 	}
-	payload := cacheFile{
-		UpdatedAt: c.updatedAt,
-		Source:    c.source,
-		Streets:   c.cache,
+	payload := diskCacheFile{
+		Version: 2,
+		Indexes: map[string]cacheFile{},
 	}
+	for key, index := range c.indexes {
+		payload.Indexes[key] = index
+	}
+	c.dirty = map[string]struct{}{}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		c.mu.Unlock()
 		return err
 	}
-	c.dirty = false
 	c.mu.Unlock()
 
 	if err := os.MkdirAll(filepath.Dir(c.cachePath), 0o755); err != nil {
@@ -171,31 +201,34 @@ func (c *Client) Save() error {
 
 func (c *Client) saveRedis() error {
 	c.mu.Lock()
-	if !c.dirty {
+	if len(c.dirty) == 0 {
 		c.mu.Unlock()
 		return nil
 	}
-	payload := cacheFile{
-		UpdatedAt: c.updatedAt,
-		Source:    c.source,
-		Streets:   c.cache,
+	pending := map[string]cacheFile{}
+	for key := range c.dirty {
+		pending[key] = c.indexes[key]
 	}
-	c.dirty = false
+	c.dirty = map[string]struct{}{}
 	c.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := c.cacheStore.Set(ctx, "paris", payload); err != nil {
-		c.mu.Lock()
-		c.dirty = true
-		c.mu.Unlock()
-		return err
+	for key, payload := range pending {
+		if err := c.cacheStore.Set(ctx, key, payload); err != nil {
+			c.mu.Lock()
+			for dirtyKey := range pending {
+				c.dirty[dirtyKey] = struct{}{}
+			}
+			c.mu.Unlock()
+			return err
+		}
 	}
 	return nil
 }
 
-func (c *Client) refresh(ctx context.Context) error {
-	grouped, source, err := c.fetchParis(ctx)
+func (c *Client) refresh(ctx context.Context, bounds geo.Bounds, indexKey string) error {
+	grouped, source, err := c.fetch(ctx, bounds)
 	if err != nil {
 		return err
 	}
@@ -207,18 +240,21 @@ func (c *Client) refresh(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	c.cache = grouped
-	c.source = source
-	c.updatedAt = now
-	c.dirty = true
+	c.indexes[indexKey] = cacheFile{
+		UpdatedAt: now,
+		Source:    source,
+		Bounds:    bounds,
+		Streets:   grouped,
+	}
+	c.dirty[indexKey] = struct{}{}
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *Client) fetchParis(ctx context.Context) (map[string]Result, string, error) {
+func (c *Client) fetch(ctx context.Context, bounds geo.Bounds) (map[string]Result, string, error) {
 	var lastErr error
 	for _, endpoint := range []string{PrimaryEndpoint, FallbackEndpoint} {
-		grouped, err := c.lookup(ctx, endpoint)
+		grouped, err := c.lookup(ctx, endpoint, bounds)
 		if err == nil {
 			return grouped, endpoint, nil
 		}
@@ -227,8 +263,8 @@ func (c *Client) fetchParis(ctx context.Context) (map[string]Result, string, err
 	return nil, "", lastErr
 }
 
-func (c *Client) lookup(ctx context.Context, endpoint string) (map[string]Result, error) {
-	query := fmt.Sprintf(`[out:json][timeout:45];way["highway"]["name"](%s);out tags geom;`, ParisBBox)
+func (c *Client) lookup(ctx context.Context, endpoint string, bounds geo.Bounds) (map[string]Result, error) {
+	query := fmt.Sprintf(`[out:json][timeout:45];way["highway"]["name"](%s);out tags geom;`, bounds.OverpassBBox())
 	form := url.Values{}
 	form.Set("data", query)
 
@@ -299,23 +335,33 @@ func (c *Client) load() {
 		return
 	}
 
+	var diskPayload diskCacheFile
+	if err := json.Unmarshal(data, &diskPayload); err == nil && diskPayload.Indexes != nil {
+		c.indexes = diskPayload.Indexes
+		return
+	}
+
 	var payload cacheFile
 	if err := json.Unmarshal(data, &payload); err == nil && payload.Streets != nil {
-		c.cache = payload.Streets
-		c.source = payload.Source
-		c.updatedAt = payload.UpdatedAt
+		if payload.Bounds == (geo.Bounds{}) {
+			payload.Bounds = defaultBounds()
+		}
+		c.indexes[defaultIndexKey] = payload
 		return
 	}
 
 	legacy := map[string]Result{}
 	if err := json.Unmarshal(data, &legacy); err == nil {
-		c.cache = legacy
+		c.indexes[defaultIndexKey] = cacheFile{
+			Bounds:  defaultBounds(),
+			Streets: legacy,
+		}
 	}
 }
 
-func (c *Client) loadRedis(ctx context.Context) error {
+func (c *Client) loadRedis(ctx context.Context, indexKey string) error {
 	c.mu.Lock()
-	if c.loadedRedis {
+	if c.loadedRedis[indexKey] {
 		c.mu.Unlock()
 		return nil
 	}
@@ -324,22 +370,24 @@ func (c *Client) loadRedis(ctx context.Context) error {
 	var payload cacheFile
 	loadCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	found, err := c.cacheStore.Get(loadCtx, "paris", &payload)
+	found, err := c.cacheStore.Get(loadCtx, indexKey, &payload)
 	if err != nil {
 		return err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.loadedRedis = true
+	c.loadedRedis[indexKey] = true
 	if !found || payload.Streets == nil {
 		return nil
 	}
-	c.cache = payload.Streets
-	c.source = payload.Source
-	c.updatedAt = payload.UpdatedAt
-	c.dirty = false
+	c.indexes[indexKey] = payload
+	delete(c.dirty, indexKey)
 	return nil
+}
+
+func defaultBounds() geo.Bounds {
+	return geo.Bounds{South: 48.815, West: 2.224, North: 48.902, East: 2.470}
 }
 
 func requestedNames(names []string) map[string]string {

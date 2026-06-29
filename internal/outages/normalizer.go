@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
 	"enedis-carte-coupure/internal/enedis"
+	"enedis-carte-coupure/internal/geo"
 	"enedis-carte-coupure/internal/geocode"
 	"enedis-carte-coupure/internal/streetgeom"
 )
@@ -24,15 +26,28 @@ type GeometryProvider interface {
 	Streets(ctx context.Context, names []string) map[string]streetgeom.Result
 }
 
+type BoundedGeometryProvider interface {
+	StreetsInBounds(ctx context.Context, names []string, bounds geo.Bounds) map[string]streetgeom.Result
+}
+
 type Normalizer struct {
 	geocoder   Geocoder
 	geometries GeometryProvider
+}
+
+type Input struct {
+	Raw   enedis.Response
+	Query enedis.Query
 }
 
 type Response struct {
 	UpdatedAt string          `json:"updatedAt"`
 	Source    Source          `json:"source"`
 	Query     enedis.Query    `json:"query"`
+	Queries   []enedis.Query  `json:"queries,omitempty"`
+	Viewport  *geo.Bounds     `json:"viewport,omitempty"`
+	Communes  []Commune       `json:"communes,omitempty"`
+	Warnings  []string        `json:"warnings,omitempty"`
 	Polygon   json.RawMessage `json:"polygon"`
 	Stats     Stats           `json:"stats"`
 	Outages   []Outage        `json:"outages"`
@@ -47,6 +62,13 @@ type Source struct {
 	GeocoderEndpoint         string `json:"geocoderEndpoint"`
 	GeocoderFallbackEndpoint string `json:"geocoderFallbackEndpoint"`
 	StreetGeometryEndpoint   string `json:"streetGeometryEndpoint"`
+}
+
+type Commune struct {
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	Postcodes []string  `json:"postcodes,omitempty"`
+	Center    geo.Point `json:"center,omitempty"`
 }
 
 type Stats struct {
@@ -103,33 +125,100 @@ func NewNormalizer(geocoder Geocoder, geometries GeometryProvider) *Normalizer {
 }
 
 func (n *Normalizer) Normalize(ctx context.Context, raw enedis.Response, query enedis.Query, shouldGeocode bool) Response {
+	return n.NormalizeWithBounds(ctx, raw, query, shouldGeocode, nil)
+}
+
+func (n *Normalizer) NormalizeWithBounds(ctx context.Context, raw enedis.Response, query enedis.Query, shouldGeocode bool, geometryBounds *geo.Bounds) Response {
+	return n.NormalizeSet(ctx, []Input{{Raw: raw, Query: query}}, shouldGeocode, geometryBounds)
+}
+
+func (n *Normalizer) NormalizeSet(ctx context.Context, inputs []Input, shouldGeocode bool, geometryBounds *geo.Bounds) Response {
 	streetMap := map[string]*Street{}
+	outageMap := map[string]*Outage{}
+	polygons := make([]json.RawMessage, 0, len(inputs))
+	queries := make([]enedis.Query, 0, len(inputs))
 	addressRows := 0
+	compteurIncidentHTA := 0
+	compteurTravauxHTA := 0
+	compteurBT := 0
+	var recap json.RawMessage
+	var crises json.RawMessage
 
-	for _, outage := range raw.ResultMegacache.ListeCoupuresInfoReseau {
-		for _, address := range outage.ListeAdresses {
-			addressRows++
-			parsed := parseLocalisation(address.Localisation, query.City)
-			key := parsed.NormalizedKey + "|" + parsed.Postcode
+	for _, input := range inputs {
+		raw := input.Raw
+		query := input.Query
+		queries = append(queries, query)
+		if len(raw.Polygon) > 0 {
+			polygons = append(polygons, raw.Polygon)
+		}
+		compteurIncidentHTA += raw.ResultMegacache.CompteurIncidentHTA
+		compteurTravauxHTA += raw.ResultMegacache.CompteurTravauxHTA
+		compteurBT += raw.ResultMegacache.CompteurBT
+		if len(recap) == 0 && len(raw.ResultMegacache.Recap) > 0 {
+			recap = raw.ResultMegacache.Recap
+		}
+		if len(crises) == 0 && len(raw.ResultMegacache.ListeCrises) > 0 {
+			crises = raw.ResultMegacache.ListeCrises
+		}
 
-			street, ok := streetMap[key]
-			if !ok {
-				street = &Street{
-					Key:            key,
-					Label:          parsed.Label,
-					NormalizedName: parsed.NormalizedName,
-					City:           parsed.City,
-					Postcode:       parsed.Postcode,
+		for outageIndex, outage := range raw.ResultMegacache.ListeCoupuresInfoReseau {
+			outageKey := outage.IDCoupure
+			if outageKey == "" {
+				outageKey = query.Insee + ":" + strconv.Itoa(outageIndex)
+			}
+			if existing, ok := outageMap[outageKey]; ok {
+				existing.DateCoupure = earliestFrenchDate(existing.DateCoupure, outage.DateCoupure)
+				existing.DateRealimentation = latestFrenchDate(existing.DateRealimentation, outage.DateRealimentation)
+				existing.NbFoyersCoupes += outage.NbFoyersCoupes
+				for _, address := range outage.ListeAdresses {
+					addUniqueAddress(&existing.Addresses, address)
 				}
-				streetMap[key] = street
+			} else {
+				addresses := make([]enedis.Address, 0, len(outage.ListeAdresses))
+				for _, address := range outage.ListeAdresses {
+					addUniqueAddress(&addresses, address)
+				}
+				outageMap[outageKey] = &Outage{
+					ID:                 outage.IDCoupure,
+					Status:             outage.EtatCoupure,
+					Type:               outage.IncidentCoupure,
+					EtatElectrique:     outage.EtatElectrique,
+					CodeInsee:          outage.CodeInsee,
+					DateCoupure:        outage.DateCoupure,
+					DateRealimentation: outage.DateRealimentation,
+					NbFoyersCoupes:     outage.NbFoyersCoupes,
+					Addresses:          addresses,
+				}
 			}
 
-			addUnique(&street.Localisations, address.Localisation)
-			addUnique(&street.OutageIDs, outage.IDCoupure)
-			addUnique(&street.OutageTypes, fallback(outage.IncidentCoupure, "Incident"))
-			street.NbFoyersCoupes += address.NbFoyersCoupes
-			street.FirstSeenAt = earliestFrenchDate(street.FirstSeenAt, outage.DateCoupure)
-			street.EstimatedRestoreAt = latestFrenchDate(street.EstimatedRestoreAt, outage.DateRealimentation)
+			for _, address := range outage.ListeAdresses {
+				addressRows++
+				parsed := parseLocalisation(address.Localisation, query.City)
+				key := strings.Join([]string{
+					parsed.NormalizedKey,
+					parsed.Postcode,
+					strings.ToUpper(stripAccents(parsed.City)),
+				}, "|")
+
+				street, ok := streetMap[key]
+				if !ok {
+					street = &Street{
+						Key:            key,
+						Label:          parsed.Label,
+						NormalizedName: parsed.NormalizedName,
+						City:           parsed.City,
+						Postcode:       parsed.Postcode,
+					}
+					streetMap[key] = street
+				}
+
+				addUnique(&street.Localisations, address.Localisation)
+				addUnique(&street.OutageIDs, outage.IDCoupure)
+				addUnique(&street.OutageTypes, fallback(outage.IncidentCoupure, "Incident"))
+				street.NbFoyersCoupes += address.NbFoyersCoupes
+				street.FirstSeenAt = earliestFrenchDate(street.FirstSeenAt, outage.DateCoupure)
+				street.EstimatedRestoreAt = latestFrenchDate(street.EstimatedRestoreAt, outage.DateRealimentation)
+			}
 		}
 	}
 
@@ -145,31 +234,24 @@ func (n *Normalizer) Normalize(ctx context.Context, raw enedis.Response, query e
 
 	if shouldGeocode {
 		n.geocodeStreets(ctx, streets)
-		n.attachStreetGeometry(ctx, streets)
+		n.attachStreetGeometry(ctx, streets, geometryBounds)
 	}
 
-	outageList := make([]Outage, 0, len(raw.ResultMegacache.ListeCoupuresInfoReseau))
-	for _, outage := range raw.ResultMegacache.ListeCoupuresInfoReseau {
-		outageList = append(outageList, Outage{
-			ID:                 outage.IDCoupure,
-			Status:             outage.EtatCoupure,
-			Type:               outage.IncidentCoupure,
-			EtatElectrique:     outage.EtatElectrique,
-			CodeInsee:          outage.CodeInsee,
-			DateCoupure:        outage.DateCoupure,
-			DateRealimentation: outage.DateRealimentation,
-			NbFoyersCoupes:     outage.NbFoyersCoupes,
-			Addresses:          outage.ListeAdresses,
-		})
+	outageList := make([]Outage, 0, len(outageMap))
+	for _, outage := range outageMap {
+		outageList = append(outageList, *outage)
 	}
+	sort.Slice(outageList, func(i, j int) bool {
+		return strings.Compare(outageList[i].ID, outageList[j].ID) < 0
+	})
 
 	stats := Stats{
 		Outages:             len(outageList),
 		AddressRows:         addressRows,
 		Streets:             len(streets),
-		CompteurIncidentHTA: raw.ResultMegacache.CompteurIncidentHTA,
-		CompteurTravauxHTA:  raw.ResultMegacache.CompteurTravauxHTA,
-		CompteurBT:          raw.ResultMegacache.CompteurBT,
+		CompteurIncidentHTA: compteurIncidentHTA,
+		CompteurTravauxHTA:  compteurTravauxHTA,
+		CompteurBT:          compteurBT,
 	}
 	for _, street := range streets {
 		if street.Geocode != nil {
@@ -190,7 +272,11 @@ func (n *Normalizer) Normalize(ctx context.Context, raw enedis.Response, query e
 		}
 	}
 
-	return Response{
+	var query enedis.Query
+	if len(queries) > 0 {
+		query = queries[0]
+	}
+	response := Response{
 		UpdatedAt: time.Now().Format(time.RFC3339),
 		Source: Source{
 			EnedisEndpoint:           enedis.Endpoint,
@@ -199,13 +285,17 @@ func (n *Normalizer) Normalize(ctx context.Context, raw enedis.Response, query e
 			StreetGeometryEndpoint:   streetgeom.PrimaryEndpoint,
 		},
 		Query:   query,
-		Polygon: raw.Polygon,
+		Polygon: combinePolygons(polygons),
 		Stats:   stats,
 		Outages: outageList,
 		Streets: streets,
-		Recap:   raw.ResultMegacache.Recap,
-		Crises:  raw.ResultMegacache.ListeCrises,
+		Recap:   recap,
+		Crises:  crises,
 	}
+	if len(queries) > 1 {
+		response.Queries = queries
+	}
+	return response
 }
 
 func (n *Normalizer) geocodeStreets(ctx context.Context, streets []Street) {
@@ -236,7 +326,7 @@ func (n *Normalizer) geocodeStreets(ctx context.Context, streets []Street) {
 	wg.Wait()
 }
 
-func (n *Normalizer) attachStreetGeometry(ctx context.Context, streets []Street) {
+func (n *Normalizer) attachStreetGeometry(ctx context.Context, streets []Street, geometryBounds *geo.Bounds) {
 	if n.geometries == nil {
 		return
 	}
@@ -246,7 +336,15 @@ func (n *Normalizer) attachStreetGeometry(ctx context.Context, streets []Street)
 		names = append(names, street.NormalizedName)
 	}
 
-	results := n.geometries.Streets(ctx, names)
+	var results map[string]streetgeom.Result
+	if geometryBounds != nil {
+		if bounded, ok := n.geometries.(BoundedGeometryProvider); ok {
+			results = bounded.StreetsInBounds(ctx, names, *geometryBounds)
+		}
+	}
+	if results == nil {
+		results = n.geometries.Streets(ctx, names)
+	}
 	for index := range streets {
 		key := streetgeom.Key(streets[index].NormalizedName)
 		result, ok := results[key]
@@ -424,6 +522,65 @@ func parseFrenchDate(value string) time.Time {
 	return parsed
 }
 
+func combinePolygons(polygons []json.RawMessage) json.RawMessage {
+	if len(polygons) == 0 {
+		return nil
+	}
+	if len(polygons) == 1 {
+		return polygons[0]
+	}
+
+	features := []json.RawMessage{}
+	for _, polygon := range polygons {
+		if len(polygon) == 0 || string(polygon) == "null" {
+			continue
+		}
+
+		var decoded struct {
+			Type     string            `json:"type"`
+			Features []json.RawMessage `json:"features"`
+		}
+		if err := json.Unmarshal(polygon, &decoded); err != nil {
+			continue
+		}
+
+		switch decoded.Type {
+		case "FeatureCollection":
+			features = append(features, decoded.Features...)
+		case "Feature":
+			features = append(features, polygon)
+		default:
+			feature, err := json.Marshal(struct {
+				Type       string          `json:"type"`
+				Geometry   json.RawMessage `json:"geometry"`
+				Properties map[string]any  `json:"properties"`
+			}{
+				Type:       "Feature",
+				Geometry:   polygon,
+				Properties: map[string]any{},
+			})
+			if err == nil {
+				features = append(features, feature)
+			}
+		}
+	}
+	if len(features) == 0 {
+		return nil
+	}
+
+	combined, err := json.Marshal(struct {
+		Type     string            `json:"type"`
+		Features []json.RawMessage `json:"features"`
+	}{
+		Type:     "FeatureCollection",
+		Features: features,
+	})
+	if err != nil {
+		return nil
+	}
+	return combined
+}
+
 func addUnique(values *[]string, value string) {
 	if value == "" {
 		return
@@ -434,6 +591,15 @@ func addUnique(values *[]string, value string) {
 		}
 	}
 	*values = append(*values, value)
+}
+
+func addUniqueAddress(addresses *[]enedis.Address, address enedis.Address) {
+	for _, existing := range *addresses {
+		if existing == address {
+			return
+		}
+	}
+	*addresses = append(*addresses, address)
 }
 
 func fallback(value, fallbackValue string) string {
