@@ -4,7 +4,8 @@ const map = L.map("map", {
   inertia: true,
   inertiaDeceleration: 2600,
   inertiaMaxSpeed: 1600,
-  markerZoomAnimation: true,
+  markerZoomAnimation: false,
+  preferCanvas: true,
   wheelDebounceTime: 24,
   wheelPxPerZoomLevel: 92,
   zoomAnimation: true,
@@ -23,7 +24,7 @@ map.createPane("streetPane");
 
 map.getPane("streetPane").style.zIndex = 420;
 
-const streetRenderer = L.svg({ pane: "streetPane", padding: 0.45 });
+const streetRenderer = L.canvas({ pane: "streetPane", padding: 0.55, tolerance: 8 });
 
 const outageLayer = L.layerGroup().addTo(map);
 const polygonLayer = L.layerGroup().addTo(map);
@@ -54,16 +55,17 @@ const state = {
   didFitInitialBounds: false,
   abortController: null,
   loadTimer: null,
-  lastRequestKey: "",
+  pendingRequestKey: "",
+  lastLoadedKey: "",
 };
 
 const MIN_FETCH_ZOOM = 11;
-const FETCH_DEBOUNCE_MS = 450;
+const FETCH_DEBOUNCE_MS = 650;
 
 window.addEventListener("resize", () => map.invalidateSize());
-map.on("zoomend", updateStreetStyles);
 map.on("moveend", scheduleViewportLoad);
-map.on("movestart zoomstart popupopen", hideHoverLabel);
+map.on("movestart zoomstart", beginMapInteraction);
+map.on("popupopen", hideHoverLabel);
 elements.searchInput.addEventListener("input", (event) => {
   state.query = event.target.value.trim().toLowerCase();
   render();
@@ -89,20 +91,22 @@ async function loadData() {
 
   const request = viewportRequest();
   if (!request) return;
-  if (request.key === state.lastRequestKey && state.data) return;
-  state.lastRequestKey = request.key;
+  if (request.key === state.lastLoadedKey && state.data) return;
+  state.pendingRequestKey = request.key;
 
   state.abortController?.abort();
-  state.abortController = new AbortController();
+  const controller = new AbortController();
+  state.abortController = controller;
   elements.status.textContent = "Chargement des coupures dans la vue...";
 
   try {
     const response = await fetch(`/api/outages?${request.params}`, {
-      signal: state.abortController.signal,
+      signal: controller.signal,
       headers: { accept: "application/json" },
     });
     if (!response.ok) throw new Error(await errorMessage(response));
     state.data = await response.json();
+    state.lastLoadedKey = request.key;
     elements.status.textContent = buildStatusText(state.data);
     render();
   } catch (error) {
@@ -110,6 +114,9 @@ async function loadData() {
       elements.status.textContent = `Erreur: ${error.message}`;
       clearResults();
     }
+  } finally {
+    if (state.abortController === controller) state.abortController = null;
+    if (state.pendingRequestKey === request.key) state.pendingRequestKey = "";
   }
 }
 
@@ -126,6 +133,12 @@ function clearResults() {
   elements.btCount.textContent = "0";
   elements.visibleCount.textContent = "0 rues visibles";
   elements.updatedAt.textContent = "-";
+}
+
+function beginMapInteraction() {
+  hideHoverLabel();
+  window.clearTimeout(state.loadTimer);
+  state.abortController?.abort();
 }
 
 function scheduleViewportLoad() {
@@ -245,8 +258,10 @@ function selectStreet(street, { fit = false, openPopup = false, scrollList = tru
   const entry = state.layerByKey.get(street.key);
   if (!entry) return;
   hideHoverLabel();
+  const previousEntry = state.layerByKey.get(state.activeKey);
   state.activeKey = street.key;
-  updateStreetStyles();
+  if (previousEntry) applyStreetStyle(previousEntry);
+  applyStreetStyle(entry);
   updateActiveListItem(scrollList);
   bringStreetToFront(entry);
 
@@ -366,6 +381,7 @@ function createGeometryEntry(street) {
       ...streetCasingStyle(street),
       renderer: streetRenderer,
       interactive: false,
+      smoothFactor: 2.2,
     });
     casing.addTo(group);
     casings.push(casing);
@@ -374,6 +390,7 @@ function createGeometryEntry(street) {
       ...streetStrokeStyle(street),
       renderer: streetRenderer,
       interactive: false,
+      smoothFactor: 2.2,
     });
     stroke.addTo(group);
     strokes.push(stroke);
@@ -382,10 +399,11 @@ function createGeometryEntry(street) {
       className: "street-hit-path",
       color: "#000000",
       weight: hitWeight(),
-      opacity: 0.001,
+      opacity: 0,
       lineCap: "round",
       lineJoin: "round",
       renderer: streetRenderer,
+      smoothFactor: 2.2,
     });
     hitArea.bindPopup(popupHtml(street));
     hitArea.addTo(group);
@@ -424,6 +442,7 @@ function createPointEntry(street) {
     fillColor: markerColor(street),
     fillOpacity: 0.8,
     opacity: 0.95,
+    renderer: streetRenderer,
     weight: 3,
   });
   marker.bindPopup(popupHtml(street));
