@@ -28,7 +28,8 @@ func main() {
 	redisPassword := flag.String("redis-password", envString("REDIS_PASSWORD", ""), "Redis password")
 	redisDB := flag.Int("redis-db", envInt("REDIS_DB", 0), "Redis database index")
 	redisPrefix := flag.String("redis-prefix", envString("REDIS_PREFIX", "enedis-carte-coupure"), "Redis cache key prefix")
-	outageCacheTTL := 5 * time.Minute
+	outageCacheTTL := envDuration("OUTAGE_CACHE_TTL", 5*time.Minute)
+	outageStaleTTL := envDuration("OUTAGE_CACHE_STALE_TTL", 6*time.Hour)
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: 80 * time.Second}
@@ -60,9 +61,9 @@ func main() {
 	}
 	if outageCache == nil {
 		outageCache = appcache.NewMemoryTTLJSONStore()
-		log.Printf("outages cache backend: memory ttl=%s", outageCacheTTL)
+		log.Printf("outages cache backend: memory fresh=%s stale=%s", outageCacheTTL, outageStaleTTL)
 	} else {
-		log.Printf("outages cache backend: redis ttl=%s", outageCacheTTL)
+		log.Printf("outages cache backend: redis fresh=%s stale=%s", outageCacheTTL, outageStaleTTL)
 	}
 
 	geocoder := geocode.NewClient(httpClient, *cachePath, geocode.WithCache(geocodeCache))
@@ -78,6 +79,7 @@ func main() {
 		Geometries:     geometries,
 		OutageCache:    outageCache,
 		OutageCacheTTL: outageCacheTTL,
+		OutageStaleTTL: outageStaleTTL,
 	})
 
 	log.Printf("listening on http://localhost%s", *addr)
@@ -99,6 +101,19 @@ func envInt(name string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(name string, fallback time.Duration) time.Duration {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid duration %s=%q, using %s", name, value, fallback)
 		return fallback
 	}
 	return parsed

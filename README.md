@@ -12,7 +12,7 @@ L’interface Enedis affiche bien les incidents, mais sa carte ne rend pas toute
 - Couleurs par type d’incident: HTA en rouge, BT en orange.
 - Recherche par rue, arrondissement ou type d’incident.
 - Vue mobile avec carte et liste en panneau bas.
-- Cache Redis 5 minutes pour `/api/outages`, plus caches géocodage et index OSM.
+- Cache Redis stale-while-revalidate pour `/api/outages`, plus caches géocodage et index OSM.
 - Fallback fichier local si Redis n’est pas disponible.
 - Backend Go sans framework, frontend HTML/CSS/JS simple.
 - Image Docker multi-stage pour le déploiement.
@@ -64,9 +64,11 @@ REDIS_URL=redis://localhost:6379
 REDIS_ADDR=localhost:6379
 REDIS_DB=0
 REDIS_PREFIX=enedis-carte-coupure
+OUTAGE_CACHE_TTL=5m
+OUTAGE_CACHE_STALE_TTL=6h
 ```
 
-`REDIS_URL` ou `REDIS_PRIVATE_URL` sont prioritaires quand ils existent, ce qui permet un déploiement Railway avec un service Redis attaché. `REDIS_ADDR` reste pratique en local. Les réponses `/api/outages` sont gardées 5 minutes; les caches géocodage et géométrie restent plus durables.
+`REDIS_URL` ou `REDIS_PRIVATE_URL` sont prioritaires quand ils existent, ce qui permet un déploiement Railway avec un service Redis attaché. `REDIS_ADDR` reste pratique en local. Les réponses `/api/outages` sont fraîches pendant `OUTAGE_CACHE_TTL`, puis restent servies immédiatement jusqu’à `OUTAGE_CACHE_STALE_TTL` pendant qu’un rafraîchissement se lance en arrière-plan. Les caches géocodage et géométrie restent plus durables.
 
 ## API
 
