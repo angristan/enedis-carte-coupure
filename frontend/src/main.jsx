@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const MIN_FETCH_ZOOM = 13;
+const MIN_FETCH_ZOOM = 12;
 const FETCH_DEBOUNCE_MS = 900;
 const VIEWPORT_GRID = 0.01;
 const INITIAL_CENTER = [48.8566, 2.3522];
