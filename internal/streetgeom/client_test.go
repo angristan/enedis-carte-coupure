@@ -1,6 +1,10 @@
 package streetgeom
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
 
 func TestKeyNormalizesOSMAndEnedisStreetNames(t *testing.T) {
 	cases := map[string]string{
@@ -43,5 +47,22 @@ func TestFilterResultNearPointKeepsClosestSameNameComponent(t *testing.T) {
 	}
 	if got, want := len(filtered.Lines), 2; got != want {
 		t.Fatalf("filtered lines = %d, want %d", got, want)
+	}
+}
+
+func TestNameRegexFromKeyMatchesAccentedOSMName(t *testing.T) {
+	pattern := `(?i)^ *(` + nameRegexFromKey("AVENUE DE L OPERA") + `) *$`
+	if !regexp.MustCompile(pattern).MatchString("Avenue de l'Opéra") {
+		t.Fatalf("pattern %q should match accented OSM name", pattern)
+	}
+}
+
+func TestBuildLookupQueryFiltersRequestedStreetNames(t *testing.T) {
+	query := buildLookupQuery(defaultBounds(), []string{"AVENUE VICTOR HUGO", "RUE DE RIVOLI"})
+	if !strings.Contains(query, `["name"~`) {
+		t.Fatalf("query should filter by OSM name: %s", query)
+	}
+	if strings.Contains(query, `way["highway"]["name"](`) {
+		t.Fatalf("query should not fetch every named road: %s", query)
 	}
 }

@@ -23,10 +23,14 @@ import (
 const (
 	PrimaryEndpoint       = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 	FallbackEndpoint      = "https://lz4.overpass-api.de/api/interpreter"
+	cacheFileVersion      = 3
 	defaultIndexKey       = "paris"
-	viewportIndexPrefix   = "bounds:"
+	viewportIndexPrefix   = "streets:"
 	viewportPaddingRatio  = 0.08
 	viewportSnapGrid      = 0.005
+	maxCachedIndexes      = 64
+	redisIndexTTL         = 2 * time.Hour
+	maxNameRegexBatchSize = 36
 	maxPointMatchMeters   = 1800
 	pointMatchSlackMeters = 350
 	componentJoinMeters   = 35
@@ -37,6 +41,7 @@ type Client struct {
 	cachePath   string
 	cacheStore  cache.JSONStore
 	indexes     map[string]cacheFile
+	indexAccess map[string]time.Time
 	loadedRedis map[string]bool
 	mu          sync.Mutex
 	dirty       map[string]struct{}
@@ -64,6 +69,7 @@ type Result struct {
 }
 
 type cacheFile struct {
+	Version   int               `json:"version,omitempty"`
 	UpdatedAt string            `json:"updatedAt"`
 	Source    string            `json:"source"`
 	Bounds    geo.Bounds        `json:"bounds"`
@@ -73,6 +79,10 @@ type cacheFile struct {
 type diskCacheFile struct {
 	Version int                  `json:"version"`
 	Indexes map[string]cacheFile `json:"indexes"`
+}
+
+type ttlStore interface {
+	SetTTL(ctx context.Context, key string, value any, ttl time.Duration) error
 }
 
 type overpassResponse struct {
@@ -100,6 +110,7 @@ func NewClient(httpClient *http.Client, cachePath string, options ...Option) *Cl
 		httpClient:  httpClient,
 		cachePath:   cachePath,
 		indexes:     map[string]cacheFile{},
+		indexAccess: map[string]time.Time{},
 		loadedRedis: map[string]bool{},
 		dirty:       map[string]struct{}{},
 	}
@@ -140,6 +151,7 @@ func (c *Client) streetRequests(ctx context.Context, requests []Request, bounds 
 
 	c.mu.Lock()
 	index := c.indexes[indexKey]
+	c.touchIndexLocked(indexKey)
 	missing := missingKeys(index.Streets, requested)
 	c.mu.Unlock()
 
@@ -147,12 +159,13 @@ func (c *Client) streetRequests(ctx context.Context, requests []Request, bounds 
 		_ = c.loadRedis(ctx, indexKey)
 		c.mu.Lock()
 		index = c.indexes[indexKey]
+		c.touchIndexLocked(indexKey)
 		missing = missingKeys(index.Streets, requested)
 		c.mu.Unlock()
 	}
 
 	if len(missing) > 0 {
-		if err := c.refresh(ctx, bounds, indexKey); err != nil {
+		if err := c.refresh(ctx, bounds, indexKey, missing); err != nil {
 			results := map[string]Result{}
 			for key, request := range requested {
 				results[key] = Result{Status: "error", Query: request.Name, Message: err.Error()}
@@ -165,8 +178,9 @@ func (c *Client) streetRequests(ctx context.Context, requests []Request, bounds 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	index = c.indexes[indexKey]
+	c.touchIndexLocked(indexKey)
 	if index.Streets == nil {
-		index = cacheFile{Bounds: bounds, Streets: map[string]Result{}}
+		index = cacheFile{Version: cacheFileVersion, Bounds: bounds, Streets: map[string]Result{}}
 	}
 	for resultKey, request := range requested {
 		nameKey := Key(request.Name)
@@ -188,6 +202,7 @@ func (c *Client) streetRequests(ctx context.Context, requests []Request, bounds 
 		results[resultKey] = result
 	}
 	c.indexes[indexKey] = index
+	c.evictIndexesLocked()
 	return results
 }
 
@@ -202,10 +217,11 @@ func (c *Client) Save() error {
 		return nil
 	}
 	payload := diskCacheFile{
-		Version: 2,
+		Version: cacheFileVersion,
 		Indexes: map[string]cacheFile{},
 	}
 	for key, index := range c.indexes {
+		index.Version = cacheFileVersion
 		payload.Indexes[key] = index
 	}
 	c.dirty = map[string]struct{}{}
@@ -230,7 +246,9 @@ func (c *Client) saveRedis() error {
 	}
 	pending := map[string]cacheFile{}
 	for key := range c.dirty {
-		pending[key] = c.indexes[key]
+		payload := c.indexes[key]
+		payload.Version = cacheFileVersion
+		pending[key] = payload
 	}
 	c.dirty = map[string]struct{}{}
 	c.mu.Unlock()
@@ -238,7 +256,13 @@ func (c *Client) saveRedis() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	for key, payload := range pending {
-		if err := c.cacheStore.Set(ctx, key, payload); err != nil {
+		var err error
+		if store, ok := c.cacheStore.(ttlStore); ok {
+			err = store.SetTTL(ctx, key, payload, redisIndexTTL)
+		} else {
+			err = c.cacheStore.Set(ctx, key, payload)
+		}
+		if err != nil {
 			c.mu.Lock()
 			for dirtyKey := range pending {
 				c.dirty[dirtyKey] = struct{}{}
@@ -250,8 +274,8 @@ func (c *Client) saveRedis() error {
 	return nil
 }
 
-func (c *Client) refresh(ctx context.Context, bounds geo.Bounds, indexKey string) error {
-	grouped, source, err := c.fetch(ctx, bounds)
+func (c *Client) refresh(ctx context.Context, bounds geo.Bounds, indexKey string, nameKeys []string) error {
+	grouped, source, err := c.fetch(ctx, bounds, nameKeys)
 	if err != nil {
 		return err
 	}
@@ -263,21 +287,33 @@ func (c *Client) refresh(ctx context.Context, bounds geo.Bounds, indexKey string
 	}
 
 	c.mu.Lock()
-	c.indexes[indexKey] = cacheFile{
-		UpdatedAt: now,
-		Source:    source,
-		Bounds:    bounds,
-		Streets:   grouped,
+	index := c.indexes[indexKey]
+	if index.Streets == nil || index.Version != cacheFileVersion {
+		index = cacheFile{
+			Version: cacheFileVersion,
+			Bounds:  bounds,
+			Streets: map[string]Result{},
+		}
 	}
+	index.Version = cacheFileVersion
+	index.UpdatedAt = now
+	index.Source = source
+	index.Bounds = bounds
+	for key, result := range grouped {
+		index.Streets[key] = result
+	}
+	c.indexes[indexKey] = index
+	c.touchIndexLocked(indexKey)
+	c.evictIndexesLocked()
 	c.dirty[indexKey] = struct{}{}
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *Client) fetch(ctx context.Context, bounds geo.Bounds) (map[string]Result, string, error) {
+func (c *Client) fetch(ctx context.Context, bounds geo.Bounds, nameKeys []string) (map[string]Result, string, error) {
 	var lastErr error
 	for _, endpoint := range []string{PrimaryEndpoint, FallbackEndpoint} {
-		grouped, err := c.lookup(ctx, endpoint, bounds)
+		grouped, err := c.lookup(ctx, endpoint, bounds, nameKeys)
 		if err == nil {
 			return grouped, endpoint, nil
 		}
@@ -286,8 +322,8 @@ func (c *Client) fetch(ctx context.Context, bounds geo.Bounds) (map[string]Resul
 	return nil, "", lastErr
 }
 
-func (c *Client) lookup(ctx context.Context, endpoint string, bounds geo.Bounds) (map[string]Result, error) {
-	query := fmt.Sprintf(`[out:json][timeout:45];way["highway"]["name"](%s);out tags geom;`, bounds.OverpassBBox())
+func (c *Client) lookup(ctx context.Context, endpoint string, bounds geo.Bounds, nameKeys []string) (map[string]Result, error) {
+	query := buildLookupQuery(bounds, nameKeys)
 	form := url.Values{}
 	form.Set("data", query)
 
@@ -360,25 +396,38 @@ func (c *Client) load() {
 
 	var diskPayload diskCacheFile
 	if err := json.Unmarshal(data, &diskPayload); err == nil && diskPayload.Indexes != nil {
-		c.indexes = diskPayload.Indexes
+		if diskPayload.Version == cacheFileVersion {
+			c.indexes = diskPayload.Indexes
+			now := time.Now()
+			for key := range c.indexes {
+				c.indexAccess[key] = now
+			}
+		}
 		return
 	}
 
 	var payload cacheFile
 	if err := json.Unmarshal(data, &payload); err == nil && payload.Streets != nil {
+		if payload.Version != 0 && payload.Version != cacheFileVersion {
+			return
+		}
 		if payload.Bounds == (geo.Bounds{}) {
 			payload.Bounds = defaultBounds()
 		}
+		payload.Version = cacheFileVersion
 		c.indexes[defaultIndexKey] = payload
+		c.indexAccess[defaultIndexKey] = time.Now()
 		return
 	}
 
 	legacy := map[string]Result{}
 	if err := json.Unmarshal(data, &legacy); err == nil {
 		c.indexes[defaultIndexKey] = cacheFile{
+			Version: cacheFileVersion,
 			Bounds:  defaultBounds(),
 			Streets: legacy,
 		}
+		c.indexAccess[defaultIndexKey] = time.Now()
 	}
 }
 
@@ -404,9 +453,42 @@ func (c *Client) loadRedis(ctx context.Context, indexKey string) error {
 	if !found || payload.Streets == nil {
 		return nil
 	}
+	if payload.Version != cacheFileVersion {
+		return nil
+	}
 	c.indexes[indexKey] = payload
+	c.touchIndexLocked(indexKey)
+	c.evictIndexesLocked()
 	delete(c.dirty, indexKey)
 	return nil
+}
+
+func (c *Client) touchIndexLocked(indexKey string) {
+	c.indexAccess[indexKey] = time.Now()
+}
+
+func (c *Client) evictIndexesLocked() {
+	for len(c.indexes) > maxCachedIndexes {
+		var oldestKey string
+		var oldestTime time.Time
+		for key := range c.indexes {
+			if key == defaultIndexKey {
+				continue
+			}
+			accessed := c.indexAccess[key]
+			if oldestKey == "" || accessed.Before(oldestTime) {
+				oldestKey = key
+				oldestTime = accessed
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(c.indexes, oldestKey)
+		delete(c.indexAccess, oldestKey)
+		delete(c.loadedRedis, oldestKey)
+		delete(c.dirty, oldestKey)
+	}
 }
 
 func defaultBounds() geo.Bounds {
@@ -452,6 +534,104 @@ func missingKeys(cache map[string]Result, requested map[string]Request) []string
 		}
 	}
 	return missing
+}
+
+func buildLookupQuery(bounds geo.Bounds, nameKeys []string) string {
+	nameKeys = uniqueSortedNameKeys(nameKeys)
+	if len(nameKeys) == 0 {
+		return fmt.Sprintf(`[out:json][timeout:45];way["highway"]["name"](%s);out tags geom;`, bounds.OverpassBBox())
+	}
+
+	var builder strings.Builder
+	builder.WriteString("[out:json][timeout:45];(")
+	for start := 0; start < len(nameKeys); start += maxNameRegexBatchSize {
+		end := min(start+maxNameRegexBatchSize, len(nameKeys))
+		regexes := make([]string, 0, end-start)
+		for _, nameKey := range nameKeys[start:end] {
+			regex := nameRegexFromKey(nameKey)
+			if regex != "" {
+				regexes = append(regexes, regex)
+			}
+		}
+		if len(regexes) == 0 {
+			continue
+		}
+		builder.WriteString(`way["highway"]["name"~"^ *(`)
+		builder.WriteString(escapeOverpassRegex(strings.Join(regexes, "|")))
+		builder.WriteString(`) *$",i](`)
+		builder.WriteString(bounds.OverpassBBox())
+		builder.WriteString(");")
+	}
+	builder.WriteString(");out tags geom;")
+	return builder.String()
+}
+
+func uniqueSortedNameKeys(nameKeys []string) []string {
+	seen := map[string]struct{}{}
+	unique := []string{}
+	for _, nameKey := range nameKeys {
+		nameKey = strings.TrimSpace(nameKey)
+		if nameKey == "" {
+			continue
+		}
+		if _, ok := seen[nameKey]; ok {
+			continue
+		}
+		seen[nameKey] = struct{}{}
+		unique = append(unique, nameKey)
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func nameRegexFromKey(nameKey string) string {
+	tokens := strings.Fields(nameKey)
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		part := tokenRegex(token)
+		if part == "" {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, `[ ./'’-]+`)
+}
+
+func tokenRegex(token string) string {
+	var builder strings.Builder
+	for _, r := range token {
+		switch r {
+		case 'A':
+			builder.WriteString(`[AÀÁÂÃÄÅàáâãäå]`)
+		case 'C':
+			builder.WriteString(`[CÇç]`)
+		case 'E':
+			builder.WriteString(`[EÈÉÊËèéêë]`)
+		case 'I':
+			builder.WriteString(`[IÌÍÎÏìíîï]`)
+		case 'N':
+			builder.WriteString(`[NÑñ]`)
+		case 'O':
+			builder.WriteString(`[OÒÓÔÕÖòóôõö]`)
+		case 'U':
+			builder.WriteString(`[UÙÚÛÜùúûü]`)
+		case 'Y':
+			builder.WriteString(`[YÝŸýÿ]`)
+		default:
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				builder.WriteRune(r)
+			} else {
+				builder.WriteString(regexp.QuoteMeta(string(r)))
+			}
+		}
+	}
+	return builder.String()
+}
+
+func escapeOverpassRegex(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return value
 }
 
 func filterResultNearPoint(result Result, point Point) Result {
@@ -606,6 +786,13 @@ func projectMeters(point Point, originLat float64) (float64, float64) {
 	lngRad := point.Lng * math.Pi / 180
 	originLatRad := originLat * math.Pi / 180
 	return earthRadiusMeters * lngRad * math.Cos(originLatRad), earthRadiusMeters * latRad
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func Key(value string) string {

@@ -16,6 +16,8 @@ import (
 	"enedis-carte-coupure/internal/httpserver"
 	"enedis-carte-coupure/internal/outages"
 	"enedis-carte-coupure/internal/streetgeom"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -54,6 +56,11 @@ func main() {
 			geometryCache = appcache.NewRedisJSONStore(redisClient, *redisPrefix+":streetgeom")
 			outageCache = appcache.NewRedisJSONStore(redisClient, *redisPrefix+":outages")
 			log.Printf("cache backend: redis db=%d prefix=%s", *redisDB, *redisPrefix)
+			if removed, err := cleanupLegacyStreetGeometryKeys(context.Background(), redisClient, *redisPrefix); err != nil {
+				log.Printf("cleanup legacy street geometry cache: %v", err)
+			} else if removed > 0 {
+				log.Printf("cleanup legacy street geometry cache: removed %d keys", removed)
+			}
 		}
 	}
 	if geocodeCache == nil || geometryCache == nil {
@@ -117,4 +124,30 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func cleanupLegacyStreetGeometryKeys(ctx context.Context, client *redis.Client, prefix string) (int64, error) {
+	cleanupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	pattern := prefix + ":streetgeom:bounds:*"
+	var cursor uint64
+	var removed int64
+	for {
+		keys, next, err := client.Scan(cleanupCtx, cursor, pattern, 250).Result()
+		if err != nil {
+			return removed, err
+		}
+		cursor = next
+		if len(keys) > 0 {
+			deleted, err := client.Del(cleanupCtx, keys...).Result()
+			if err != nil {
+				return removed, err
+			}
+			removed += deleted
+		}
+		if cursor == 0 {
+			return removed, nil
+		}
+	}
 }
