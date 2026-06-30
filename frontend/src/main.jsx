@@ -22,8 +22,9 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const MIN_FETCH_ZOOM = 11;
-const FETCH_DEBOUNCE_MS = 650;
+const MIN_FETCH_ZOOM = 13;
+const FETCH_DEBOUNCE_MS = 900;
+const VIEWPORT_GRID = 0.01;
 const INITIAL_CENTER = [48.8566, 2.3522];
 const INITIAL_ZOOM = 12;
 
@@ -41,6 +42,7 @@ function App() {
   const dataRef = useLatest(data);
   const viewportRef = useLatest(viewport);
   const lastLoadedKeyRef = useRef("");
+  const activeRequestKeyRef = useRef("");
   const mapRef = useRef(null);
   const listRef = useRef(null);
 
@@ -50,19 +52,22 @@ function App() {
 
       if (nextViewport.zoom < MIN_FETCH_ZOOM) {
         abortRef.current?.abort();
+        activeRequestKeyRef.current = "";
         setLoading(false);
         setData(null);
         setCacheStatus("");
-        setStatus("Zoomez pour charger les coupures dans la vue.");
+        setStatus("Zoomez pour charger les rues touchées dans la vue.");
         return;
       }
 
       const request = viewportRequest(nextViewport.bounds);
       if (!force && request.key === lastLoadedKeyRef.current && dataRef.current) return;
+      if (!force && request.key === activeRequestKeyRef.current) return;
 
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+      activeRequestKeyRef.current = request.key;
       setLoading(true);
       setStatus("Chargement des coupures dans la vue...");
 
@@ -75,19 +80,23 @@ function App() {
         if (!response.ok) throw new Error(await errorMessage(response));
 
         const payload = await response.json();
+        if (abortRef.current !== controller) return;
         setData(payload);
         setCacheStatus(responseCacheStatus);
         setStatus(buildStatusText(payload));
         lastLoadedKeyRef.current = request.key;
       } catch (error) {
-        if (error.name !== "AbortError") {
+        if (error.name !== "AbortError" && abortRef.current === controller) {
           setData(null);
           setCacheStatus("");
           setStatus(`Erreur: ${error.message}`);
         }
       } finally {
-        if (abortRef.current === controller) abortRef.current = null;
-        setLoading(false);
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          activeRequestKeyRef.current = "";
+          setLoading(false);
+        }
       }
     },
     [dataRef],
@@ -656,14 +665,24 @@ function viewportFromMap(map) {
 }
 
 function viewportRequest(bounds) {
+  const snapped = snapBounds(bounds, VIEWPORT_GRID);
   const params = new URLSearchParams();
-  params.set("south", bounds.south.toFixed(6));
-  params.set("west", bounds.west.toFixed(6));
-  params.set("north", bounds.north.toFixed(6));
-  params.set("east", bounds.east.toFixed(6));
+  params.set("south", snapped.south.toFixed(4));
+  params.set("west", snapped.west.toFixed(4));
+  params.set("north", snapped.north.toFixed(4));
+  params.set("east", snapped.east.toFixed(4));
   return {
     params,
     key: params.toString(),
+  };
+}
+
+function snapBounds(bounds, grid) {
+  return {
+    south: Math.floor(bounds.south / grid) * grid,
+    west: Math.floor(bounds.west / grid) * grid,
+    north: Math.ceil(bounds.north / grid) * grid,
+    east: Math.ceil(bounds.east / grid) * grid,
   };
 }
 
@@ -851,6 +870,9 @@ function buildStatusText(payload) {
   if (!stats.streets) return `Aucune rue touchée remontée par Enedis dans les communes visibles${suffix}.`;
   if (stats.streetGeometry) {
     return `${formatNumber(stats.streetGeometry)} rues surlignées sur ${formatNumber(stats.streets)} rues remontées par Enedis${suffix}`;
+  }
+  if (!stats.geocodedStreets) {
+    return `${formatNumber(stats.streets)} rues remontées par Enedis${suffix}. Zoomez pour afficher les tracés.`;
   }
   return `${formatNumber(stats.geocodedStreets)} rues placées sur ${formatNumber(stats.streets)} rues remontées par Enedis${suffix}`;
 }

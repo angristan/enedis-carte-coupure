@@ -29,7 +29,7 @@ const (
 	viewportPaddingRatio  = 0.08
 	viewportSnapGrid      = 0.005
 	maxCachedIndexes      = 64
-	redisIndexTTL         = 2 * time.Hour
+	redisIndexTTL         = 24 * time.Hour
 	maxNameRegexBatchSize = 36
 	maxPointMatchMeters   = 1800
 	pointMatchSlackMeters = 350

@@ -77,8 +77,8 @@ REDIS_URL=redis://localhost:6379
 REDIS_ADDR=localhost:6379
 REDIS_DB=0
 REDIS_PREFIX=enedis-carte-coupure
-OUTAGE_CACHE_TTL=5m
-OUTAGE_CACHE_STALE_TTL=6h
+OUTAGE_CACHE_TTL=15m
+OUTAGE_CACHE_STALE_TTL=24h
 ```
 
 `REDIS_URL` ou `REDIS_PRIVATE_URL` sont prioritaires quand ils existent, ce qui permet un déploiement Railway avec un service Redis attaché. `REDIS_ADDR` reste pratique en local. Les réponses `/api/outages` sont fraîches pendant `OUTAGE_CACHE_TTL`, puis restent servies immédiatement jusqu’à `OUTAGE_CACHE_STALE_TTL` pendant qu’un rafraîchissement se lance en arrière-plan. Les caches géocodage et géométrie restent plus durables.

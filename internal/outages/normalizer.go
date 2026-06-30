@@ -17,6 +17,11 @@ import (
 	"enedis-carte-coupure/internal/streetgeom"
 )
 
+const (
+	maxGeocodeConcurrency = 4
+	geocodeMissDelay      = 120 * time.Millisecond
+)
+
 type Geocoder interface {
 	Street(ctx context.Context, query string) geocode.Result
 	Save() error
@@ -307,28 +312,41 @@ func (n *Normalizer) NormalizeSet(ctx context.Context, inputs []Input, shouldGeo
 }
 
 func (n *Normalizer) geocodeStreets(ctx context.Context, streets []Street) {
+	if n.geocoder == nil || len(streets) == 0 {
+		return
+	}
+
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for index := range jobs {
-			query := strings.TrimSpace(strings.Join([]string{
-				streets[index].NormalizedName,
-				streets[index].City,
-				streets[index].Postcode,
-			}, " "))
-			result := n.geocoder.Street(ctx, query)
-			streets[index].Geocode = &result
-			if !result.Cached {
-				time.Sleep(120 * time.Millisecond)
+	workerCount := min(maxGeocodeConcurrency, len(streets))
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				query := strings.TrimSpace(strings.Join([]string{
+					streets[index].NormalizedName,
+					streets[index].City,
+					streets[index].Postcode,
+				}, " "))
+				result := n.geocoder.Street(ctx, query)
+				streets[index].Geocode = &result
+				if !result.Cached {
+					time.Sleep(geocodeMissDelay)
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	for index := range streets {
-		jobs <- index
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return
+		}
 	}
 	close(jobs)
 	wg.Wait()

@@ -30,8 +30,8 @@ func main() {
 	redisPassword := flag.String("redis-password", envString("REDIS_PASSWORD", ""), "Redis password")
 	redisDB := flag.Int("redis-db", envInt("REDIS_DB", 0), "Redis database index")
 	redisPrefix := flag.String("redis-prefix", envString("REDIS_PREFIX", "enedis-carte-coupure"), "Redis cache key prefix")
-	outageCacheTTL := envDuration("OUTAGE_CACHE_TTL", 5*time.Minute)
-	outageStaleTTL := envDuration("OUTAGE_CACHE_STALE_TTL", 6*time.Hour)
+	outageCacheTTL := envDuration("OUTAGE_CACHE_TTL", 15*time.Minute)
+	outageStaleTTL := envDuration("OUTAGE_CACHE_STALE_TTL", 24*time.Hour)
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: 80 * time.Second}

@@ -63,6 +63,9 @@ type server struct {
 	config     Config
 	refreshMu  sync.Mutex
 	refreshing map[string]struct{}
+	saveMu     sync.Mutex
+	saving     bool
+	saveAgain  bool
 }
 
 type outageCacheEntry struct {
@@ -119,7 +122,10 @@ func (s *server) outages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.storeOutageCache(r.Context(), cacheKey, response)
+	s.storeOutageCacheAsync(cacheKey, response)
+	if shouldGeocode {
+		s.saveGeocodeCachesAsync()
+	}
 	w.Header().Set("X-App-Cache", "MISS")
 	writeJSON(w, http.StatusOK, response)
 }
@@ -133,9 +139,6 @@ func (s *server) fetchSingleOutages(ctx context.Context, query enedis.Query, inc
 	response := s.config.Normalizer.Normalize(ctx, raw, query, shouldGeocode)
 	if includeRaw {
 		response.Raw = rawBody
-	}
-	if shouldGeocode {
-		s.saveGeocodeCaches()
 	}
 	return response, nil
 }
@@ -176,7 +179,10 @@ func (s *server) viewportOutages(w http.ResponseWriter, r *http.Request, bounds 
 		return
 	}
 
-	s.storeOutageCache(r.Context(), cacheKey, response)
+	s.storeOutageCacheAsync(cacheKey, response)
+	if shouldGeocode {
+		s.saveGeocodeCachesAsync()
+	}
 	w.Header().Set("X-App-Cache", "MISS")
 	writeJSON(w, http.StatusOK, response)
 }
@@ -214,9 +220,6 @@ func (s *server) fetchViewportOutages(ctx context.Context, bounds geo.Bounds, in
 	response.Warnings = warnings
 	if includeRaw {
 		response.Warnings = append(response.Warnings, "raw Enedis payloads are omitted for viewport aggregation")
-	}
-	if shouldGeocode {
-		s.saveGeocodeCaches()
 	}
 	return response, nil
 }
@@ -343,6 +346,17 @@ func (s *server) storeOutageCache(ctx context.Context, cacheKey string, response
 	}
 }
 
+func (s *server) storeOutageCacheAsync(cacheKey string, response outages.Response) {
+	if s.config.OutageCache == nil || s.config.OutageCacheTTL <= 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
+		defer cancel()
+		s.storeOutageCache(ctx, cacheKey, response)
+	}()
+}
+
 func (s *server) refreshOutageCache(cacheKey string, refresh func(context.Context) (outages.Response, error)) {
 	s.refreshMu.Lock()
 	if _, ok := s.refreshing[cacheKey]; ok {
@@ -370,6 +384,7 @@ func (s *server) refreshOutageCache(cacheKey string, refresh func(context.Contex
 		storeCtx, storeCancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
 		defer storeCancel()
 		s.storeOutageCache(storeCtx, cacheKey, response)
+		s.saveGeocodeCachesAsync()
 	}()
 }
 
@@ -437,14 +452,42 @@ func viewportOutageCacheKey(bounds geo.Bounds, includeRaw bool, shouldGeocode bo
 }
 
 func (s *server) saveGeocodeCaches() {
-	if err := s.config.Geocoder.Save(); err != nil {
-		log.Printf("save geocode cache: %v", err)
+	if s.config.Geocoder != nil {
+		if err := s.config.Geocoder.Save(); err != nil {
+			log.Printf("save geocode cache: %v", err)
+		}
 	}
 	if s.config.Geometries != nil {
 		if err := s.config.Geometries.Save(); err != nil {
 			log.Printf("save street geometry cache: %v", err)
 		}
 	}
+}
+
+func (s *server) saveGeocodeCachesAsync() {
+	s.saveMu.Lock()
+	if s.saving {
+		s.saveAgain = true
+		s.saveMu.Unlock()
+		return
+	}
+	s.saving = true
+	s.saveMu.Unlock()
+
+	go func() {
+		for {
+			s.saveGeocodeCaches()
+
+			s.saveMu.Lock()
+			if !s.saveAgain {
+				s.saving = false
+				s.saveMu.Unlock()
+				return
+			}
+			s.saveAgain = false
+			s.saveMu.Unlock()
+		}
+	}()
 }
 
 func responseCommunes(items []communes.Commune) []outages.Commune {
