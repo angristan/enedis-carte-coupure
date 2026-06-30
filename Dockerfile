@@ -29,6 +29,9 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 
+ENV GOMEMLIMIT=384MiB \
+  GOGC=75
+
 COPY --from=build /out/enedis-carte-coupure /app/enedis-carte-coupure
 COPY --from=frontend /src/web /app/web
 

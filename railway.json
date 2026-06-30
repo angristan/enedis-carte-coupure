@@ -7,6 +7,12 @@
   "deploy": {
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 90,
+    "limitOverride": {
+      "containers": {
+        "cpu": 1,
+        "memoryBytes": 536870912
+      }
+    },
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
