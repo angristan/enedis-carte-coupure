@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "enedis-carte-coupure",
+  "main": "./worker/index.js",
+  "compatibility_date": "2026-07-07",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "vars": {
+    "CACHE_PREFIX": "enedis-carte-coupure",
+    "COMMUNES_CACHE_TTL": "7d",
+    "ENEDIS_CACHE_TTL": "5m",
+    "OUTAGE_CACHE_TTL": "15m",
+    "OUTAGE_CACHE_STALE_TTL": "24h"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "4c344602826a4ddf959ac96a4d6aa307",
+      "preview_id": "478a9ed239344cffa0bf2a683819c990"
+    }
+  ]
+}

@@ -2,6 +2,9 @@
 .env
 *.log
 .gocache/
+.wrangler/
+**/.wrangler/
+.dev.vars*
 bin/
 cache/*.json
 coverage.out
@@ -9,3 +12,4 @@ dist/
 dump.rdb
 enedis-carte-coupure
 node_modules/
+web/
