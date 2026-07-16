@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { KVJSONStore, MemoryKVNamespace } from "./cache.js";
 import { DEFAULT_QUERY, EnedisClient } from "./enedis.js";
 import { testExports } from "./index.js";
@@ -71,5 +71,45 @@ describe("KV cache helpers", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("serves a stale commune response while refreshing it in the background", async () => {
+    const staleResponse = { updatedAt: "2026-01-01T00:00:00.000Z", stats: { outages: 1 }, outages: [], streets: [] };
+    const cache = {
+      get: vi.fn().mockResolvedValue({
+        found: true,
+        value: {
+          version: 2,
+          freshUntil: "2026-01-01T00:15:00.000Z",
+          response: staleResponse,
+        },
+      }),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
+    const backgroundTasks: Promise<unknown>[] = [];
+    const runtime = {
+      cache,
+      outageCacheTTL: 900,
+      outageStaleTTL: 86400,
+      traceCtx: { waitUntil: (task: Promise<unknown>) => backgroundTasks.push(task) },
+      enedis: { fetch: vi.fn().mockResolvedValue({}) },
+      normalizer: {
+        normalizeSet: vi.fn().mockResolvedValue({
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          source: {},
+          query: {},
+          stats: { outages: 0, streets: 0 },
+          outages: [],
+          streets: [],
+        }),
+      },
+    };
+    const commune = { code: "75056", name: "Paris", postcodes: ["75001"] };
+
+    await expect(testExports.fetchCachedCommuneOutage(commune, false, null, runtime)).resolves.toBe(staleResponse);
+    expect(backgroundTasks).toHaveLength(1);
+    await Promise.all(backgroundTasks);
+    expect(runtime.enedis.fetch).toHaveBeenCalledOnce();
+    expect(cache.set).toHaveBeenCalledOnce();
   });
 });

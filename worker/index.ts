@@ -143,11 +143,26 @@ async function fetchCachedCommuneOutage(commune, shouldGeocode, fallbackBounds, 
   const cacheKey = await communeOutageCacheKey(commune, shouldGeocode);
   if (runtime.cache && runtime.outageCacheTTL > 0) {
     const cached = await runtime.cache.get(cacheKey, { cacheTtl: 60 });
-    if (cached.found && cached.value?.version === COMMUNE_OUTAGE_CACHE_VERSION && Date.now() < Date.parse(cached.value.freshUntil)) {
+    if (cached.found && cached.value?.version === COMMUNE_OUTAGE_CACHE_VERSION) {
+      if (Date.now() < Date.parse(cached.value.freshUntil)) {
+        return cached.value.response;
+      }
+
+      const refresh = enterSpan(
+        runtime.traceCtx,
+        "outages.refresh_stale_commune",
+        { "commune.code": commune.code },
+        () => refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime),
+      ).catch((error) => console.error(`refresh commune outage cache ${commune.code}:`, error));
+      runtime.traceCtx?.waitUntil?.(refresh);
       return cached.value.response;
     }
   }
 
+  return refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime);
+}
+
+async function refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime) {
   const query = enedisQueryForCommune(commune);
   const raw = await runtime.enedis.fetch(query, { cache: false });
   const response = await runtime.normalizer.normalizeSet([{ raw, query }], { geocode: shouldGeocode, geometry: false });
@@ -322,6 +337,7 @@ function json(payload, status = 200) {
 }
 
 export const testExports = {
+  fetchCachedCommuneOutage,
   outageCacheKey,
   runtimeConfig,
 };
