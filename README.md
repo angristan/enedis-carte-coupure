@@ -94,6 +94,8 @@ Quand `south`, `west`, `north` et `east` sont fournis, le Worker echantillonne l
 
 ## Deploiement Cloudflare
 
+Le Worker est publie sur [https://enedis.stanislas.cloud](https://enedis.stanislas.cloud). Cloudflare gere le DNS et le certificat TLS via le Custom Domain declare dans `wrangler.jsonc`.
+
 Builder et deployer:
 
 ```sh
@@ -110,6 +112,8 @@ Le script de deploiement appelle Wrangler sur la config generee par Vite:
 ```sh
 wrangler deploy --config web/enedis_carte_coupure/wrangler.json
 ```
+
+L'ancien domaine Railway reste disponible comme redirecteur temporaire. Le conteneur defini par `Dockerfile` renvoie un `307` vers `https://enedis.stanislas.cloud` en conservant le chemin et la query string; `/healthz` reste local pour le healthcheck Railway.
 
 ## Observabilite
 
@@ -132,6 +136,7 @@ Cloudflare ajoute aussi ses spans automatiques pour les fetchs et les operations
 ```text
 frontend/              source React/Vite
 worker/                Worker API, clients upstream, normalisation et caches KV
+railway-redirect/      redirecteur de l'ancien domaine Railway
 wrangler.jsonc         configuration Cloudflare Workers
 vite.config.js         build frontend + Worker via le plugin Cloudflare
 web/                   build genere, ignore par git
