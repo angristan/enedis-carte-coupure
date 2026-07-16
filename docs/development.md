@@ -28,7 +28,7 @@ under `.wrangler/state`.
 | `npm run dev` | Start the local Worker and Vite development server |
 | `npm test` | Run Worker and Railway redirect tests with Vitest |
 | `npm run typecheck` | Type-check the frontend, Worker, tests, and tooling |
-| `npm run build` | Type-check and build the Worker bundle and static assets |
+| `npm run build` | Test, type-check, and build the Worker bundle and static assets |
 | `npm run build:redirect` | Compile the Railway redirect service to JavaScript |
 | `npm run preview` | Preview the production Vite build locally |
 | `npm run deploy` | Build and deploy with Wrangler |
@@ -77,10 +77,10 @@ Vitest runs in the Node environment and currently covers:
 - street-label normalization;
 - Railway redirect path/query preservation and open-redirect protection.
 
-Run the same production build after tests when changing Worker routing, assets, or Wrangler configuration:
+Run the production build when changing Worker routing, assets, or Wrangler configuration. It runs the complete
+test suite and type-check before bundling:
 
 ```sh
-npm test
 npm run build
 ```
 
