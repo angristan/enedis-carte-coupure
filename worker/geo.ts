@@ -1,4 +1,18 @@
-export function parseBounds(values) {
+export interface Bounds {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
+
+type BoundsValues = Pick<URLSearchParams, "get" | "has">;
+
+export type ParsedBounds =
+  | { hasBounds: false; bounds: null; error?: never }
+  | { hasBounds: true; bounds: Bounds; error?: never }
+  | { hasBounds: true; error: string; bounds?: never };
+
+export function parseBounds(values: BoundsValues): ParsedBounds {
   try {
     const bbox = trim(values.get("bbox"));
     if (bbox) {
@@ -28,30 +42,30 @@ export function parseBounds(values) {
       east: parseCoordinate(values.get("east"), "east"),
     });
   } catch (error) {
-    return { hasBounds: true, error: error.message || "invalid bounds" };
+    return { hasBounds: true, error: error instanceof Error ? error.message : "invalid bounds" };
   }
 }
 
-export function center(bounds) {
+export function center(bounds: Bounds) {
   return {
     lat: (bounds.south + bounds.north) / 2,
     lng: (bounds.west + bounds.east) / 2,
   };
 }
 
-export function height(bounds) {
+export function height(bounds: Bounds) {
   return bounds.north - bounds.south;
 }
 
-export function width(bounds) {
+export function width(bounds: Bounds) {
   return bounds.east - bounds.west;
 }
 
-export function area(bounds) {
+export function area(bounds: Bounds) {
   return height(bounds) * width(bounds);
 }
 
-export function padded(bounds, ratio) {
+export function padded(bounds: Bounds, ratio: number): Bounds {
   if (ratio <= 0) return bounds;
   const latPad = height(bounds) * ratio;
   const lngPad = width(bounds) * ratio;
@@ -63,7 +77,7 @@ export function padded(bounds, ratio) {
   };
 }
 
-export function snapped(bounds, grid) {
+export function snapped(bounds: Bounds, grid: number): Bounds {
   if (grid <= 0) return bounds;
   return {
     south: clampLatitude(Math.floor(bounds.south / grid) * grid),
@@ -73,11 +87,11 @@ export function snapped(bounds, grid) {
   };
 }
 
-export function boundsCacheKey(bounds) {
+export function boundsCacheKey(bounds: Bounds) {
   return [bounds.south, bounds.west, bounds.north, bounds.east].map((value) => value.toFixed(4)).join(",");
 }
 
-export function overpassBBox(bounds) {
+export function overpassBBox(bounds: Bounds) {
   return [bounds.south, bounds.west, bounds.north, bounds.east].map((value) => value.toFixed(6)).join(",");
 }
 
@@ -95,7 +109,7 @@ export function boundsFromGeoJSONGeometry(geometry) {
   return parsed.error ? null : parsed.bounds;
 }
 
-function normalizeAndValidate(bounds) {
+function normalizeAndValidate(bounds: Bounds): ParsedBounds {
   if (Object.values(bounds).some((value) => !Number.isFinite(value))) {
     return { hasBounds: true, error: "invalid bounds" };
   }

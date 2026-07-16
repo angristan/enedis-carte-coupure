@@ -30,7 +30,7 @@ The deploy script rebuilds the project and publishes the generated configuration
 
 The Worker deployment includes:
 
-- the API entrypoint in `worker/index.js`;
+- the API entrypoint in `worker/index.ts`;
 - the React build as Workers Static Assets;
 - the `CACHE` Workers KV binding;
 - the `enedis.stanislas.cloud` Custom Domain;
@@ -50,7 +50,7 @@ curl -I https://enedis.stanislas.cloud/
 Railway no longer runs the application. Its generated hostname is retained so old links and API URLs continue to
 work.
 
-The root `Dockerfile` packages `railway-redirect/server.mjs`, which:
+The root `Dockerfile` compiles `railway-redirect/server.ts` and packages the generated JavaScript service, which:
 
 - listens on Railway's `PORT`;
 - returns `200` from `/healthz` for the deployment healthcheck;

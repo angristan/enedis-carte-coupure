@@ -49,7 +49,7 @@ export async function cachedCommunesForBounds(bounds, maxCommunes, store, traceC
   return communes;
 }
 
-export async function communesForBounds(bounds, maxCommunes, traceCtx, pointIndex = null) {
+export async function communesForBounds(bounds, maxCommunes, traceCtx, pointIndex: CommunePointIndex | null = null) {
   return enterSpan(traceCtx, "communes.for_bounds", { "viewport.max_communes": maxCommunes }, async (span) => {
     const points = samplePoints(bounds);
     span.setAttribute("communes.sample_points", points.length);
@@ -89,7 +89,16 @@ export async function communesForBounds(bounds, maxCommunes, traceCtx, pointInde
 }
 
 class CommunePointIndex {
-  constructor(store, traceCtx, ttlSeconds) {
+  store: any;
+  traceCtx: any;
+  ttlSeconds: number;
+  memory: Map<string, any>;
+  loadedStore: boolean;
+  loadPromise: Promise<void> | null;
+  dirty: boolean;
+  stats: { cacheHits: number; contourHits: number; upstreamFetches: number };
+
+  constructor(store: any, traceCtx: any, ttlSeconds: number) {
     this.store = store;
     this.traceCtx = traceCtx;
     this.ttlSeconds = ttlSeconds;
@@ -183,7 +192,7 @@ class CommunePointIndex {
 
 export function enedisQueryForCommune(commune) {
   const postcode = commune.postcodes?.[0] || "";
-  const query = {
+  const query: Record<string, any> = {
     insee: commune.code,
     type: "municipality",
     adresse: commune.name,
@@ -200,7 +209,7 @@ export function enedisQueryForCommune(commune) {
   return query;
 }
 
-export async function fetchVisibleCommunes(communes, enedis, traceCtx) {
+export async function fetchVisibleCommunes(communes: any[], enedis: any, traceCtx: any) {
   return enterSpan(traceCtx, "enedis.fetch_visible_communes", { "communes.count": communes.length }, async (span) => {
     const before = { ...enedis.stats };
     const results = await mapLimit(communes, 6, async (commune) => {

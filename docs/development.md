@@ -27,7 +27,9 @@ under `.wrangler/state`.
 | --- | --- |
 | `npm run dev` | Start the local Worker and Vite development server |
 | `npm test` | Run Worker and Railway redirect tests with Vitest |
-| `npm run build` | Build the Worker bundle and static assets |
+| `npm run typecheck` | Type-check the frontend, Worker, tests, and tooling |
+| `npm run build` | Type-check and build the Worker bundle and static assets |
+| `npm run build:redirect` | Compile the Railway redirect service to JavaScript |
 | `npm run preview` | Preview the production Vite build locally |
 | `npm run deploy` | Build and deploy with Wrangler |
 | `make dev` | Makefile wrapper around the development server |
@@ -90,8 +92,10 @@ worker/                 Worker API and data pipeline
 railway-redirect/       Legacy Railway URL redirect service
 docs/                   Architecture, API, development, and operations guides
 wrangler.jsonc          Worker bindings, variables, routes, and observability
-vite.config.js          React and Cloudflare Vite integration
-vitest.config.js        Worker and redirect test discovery
+tsconfig.json           Shared TypeScript compiler configuration
+tsconfig.redirect.json  Emitting compiler configuration for the Railway service
+vite.config.ts          React and Cloudflare Vite integration
+vitest.config.ts        Worker and redirect test discovery
 Dockerfile              Railway redirect image only
 railway.json            Railway deployment and healthcheck settings
 web/                    Generated build output; ignored
@@ -104,13 +108,13 @@ Cloudflare Workers.
 
 The main modules are intentionally separated by responsibility:
 
-- `worker/index.js` owns routing, runtime configuration, response caching, and viewport composition.
-- `worker/communes.js` resolves map bounds to communes and maintains the point/contour index.
-- `worker/enedis.js` builds and executes Enedis queries.
-- `worker/outages.js` normalizes and merges incidents and streets.
-- `worker/geocode.js` handles GeoPF and fallback geocoding.
-- `worker/streetgeom.js` builds bounded Overpass queries and filters geometry.
-- `worker/cache.js` provides the traced KV JSON abstraction.
-- `worker/trace.js` wraps Cloudflare application spans.
+- `worker/index.ts` owns routing, runtime configuration, response caching, and viewport composition.
+- `worker/communes.ts` resolves map bounds to communes and maintains the point/contour index.
+- `worker/enedis.ts` builds and executes Enedis queries.
+- `worker/outages.ts` normalizes and merges incidents and streets.
+- `worker/geocode.ts` handles GeoPF and fallback geocoding.
+- `worker/streetgeom.ts` builds bounded Overpass queries and filters geometry.
+- `worker/cache.ts` provides the traced KV JSON abstraction.
+- `worker/trace.ts` wraps Cloudflare application spans.
 
 See [Architecture and data flow](architecture.md) before changing cache keys or the commune composition model.

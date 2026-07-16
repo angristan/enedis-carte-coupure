@@ -17,7 +17,12 @@ const POINT_MATCH_SLACK_METERS = 350;
 const COMPONENT_JOIN_METERS = 35;
 
 export class StreetGeometryProvider {
-  constructor(store, traceCtx) {
+  store: any;
+  traceCtx: any;
+  indexes: Map<string, any>;
+  loadedStore: Set<string>;
+
+  constructor(store: any, traceCtx?: any) {
     this.store = store;
     this.traceCtx = traceCtx;
     this.indexes = new Map();
@@ -52,7 +57,7 @@ export class StreetGeometryProvider {
       }
 
       index = this.indexes.get(indexKey) || emptyIndex(bounds);
-      const results = {};
+      const results: Record<string, any> = {};
       for (const [resultKey, request] of requested) {
         const nameKey = streetKey(request.name);
         let result = index.streets[nameKey];
@@ -87,7 +92,7 @@ export class StreetGeometryProvider {
   async refresh(bounds, indexKey, nameKeys) {
     const { grouped, source } = await this.fetch(bounds, nameKeys);
     const now = new Date().toISOString();
-    for (const result of Object.values(grouped)) {
+    for (const result of Object.values(grouped) as any[]) {
       result.updatedAt = now;
     }
 
@@ -137,8 +142,8 @@ export class StreetGeometryProvider {
         throw new Error(`${endpoint} returned ${response.status} ${response.statusText}`);
       }
 
-      const decoded = await response.json();
-      const grouped = {};
+      const decoded: any = await response.json();
+      const grouped: Record<string, any> = {};
       for (const element of decoded.elements || []) {
         if (element.type !== "way" || !element.geometry || element.geometry.length < 2) continue;
         const name = String(element.tags?.name || "").trim();
@@ -150,7 +155,7 @@ export class StreetGeometryProvider {
         result.lines.push(element.geometry.map((point) => ({ lat: point.lat, lng: point.lon })));
         grouped[key] = result;
       }
-      for (const result of Object.values(grouped)) {
+      for (const result of Object.values(grouped) as any[]) {
         result.osmNames.sort((left, right) => left.localeCompare(right));
       }
       span.setAttribute("streetgeom.results", Object.keys(grouped).length);

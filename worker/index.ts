@@ -100,10 +100,11 @@ async function fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime) 
   );
   const { responses, warnings } = await fetchVisibleCommuneOutages(visibleCommunes, shouldGeocode, bounds, runtime);
   if (responses.length === 0 && warnings.length > 0) {
-    const error = new Error("all visible commune requests failed");
-    error.status = 502;
-    error.code = "ENEDIS_FETCH_FAILED";
-    error.warnings = warnings;
+    const error = Object.assign(new Error("all visible commune requests failed"), {
+      status: 502,
+      code: "ENEDIS_FETCH_FAILED",
+      warnings,
+    });
     throw error;
   }
 
@@ -117,7 +118,7 @@ async function fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime) 
   return response;
 }
 
-async function fetchVisibleCommuneOutages(communes, shouldGeocode, fallbackBounds, runtime) {
+async function fetchVisibleCommuneOutages(communes: any[], shouldGeocode, fallbackBounds, runtime) {
   return enterSpan(runtime.traceCtx, "outages.fetch_visible_commune_facts", { "communes.count": communes.length }, async (span) => {
     const results = await mapLimit(communes, 6, async (commune) => {
       try {

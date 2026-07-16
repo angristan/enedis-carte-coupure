@@ -41,7 +41,7 @@ Browser
 ```
 
 Non-API routes are served from the Vite build through Workers Static Assets. API routes run through
-`worker/index.js` first.
+`worker/index.ts` first.
 
 ## Viewport request flow
 

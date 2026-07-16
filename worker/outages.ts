@@ -8,7 +8,11 @@ const MAX_GEOCODE_CONCURRENCY = 4;
 const GEOCODE_MISS_DELAY_MS = 120;
 
 export class Normalizer {
-  constructor(geocoder, geometries, traceCtx) {
+  geocoder: any;
+  geometries: any;
+  traceCtx: any;
+
+  constructor(geocoder: any, geometries: any, traceCtx?: any) {
     this.geocoder = geocoder;
     this.geometries = geometries;
     this.traceCtx = traceCtx;
@@ -133,7 +137,7 @@ export class Normalizer {
       span.setAttribute("outages.streets", stats.streets);
       span.setAttribute("outages.geometries", stats.streetGeometry);
 
-      const response = {
+      const response: any = {
         updatedAt: new Date().toISOString(),
         source: sourceInfo(),
         query: queries[0] || {},
@@ -156,7 +160,7 @@ export class Normalizer {
     return response;
   }
 
-  async geocodeStreets(streets) {
+  async geocodeStreets(streets: any[]) {
     if (!this.geocoder || streets.length === 0) return;
     await enterSpan(this.traceCtx, "outages.geocode_streets", { "outages.streets": streets.length }, async () => {
       await mapLimit(streets, MAX_GEOCODE_CONCURRENCY, async (street) => {
@@ -169,11 +173,11 @@ export class Normalizer {
     });
   }
 
-  async attachStreetGeometry(streets, geometryBounds) {
+  async attachStreetGeometry(streets: any[], geometryBounds) {
     if (!this.geometries || streets.length === 0) return;
     await enterSpan(this.traceCtx, "outages.attach_geometry", { "outages.streets": streets.length }, async () => {
       const requests = streets.map((street) => {
-        const request = {
+        const request: any = {
           id: street.key,
           name: street.normalizedName,
         };
@@ -197,7 +201,7 @@ export class Normalizer {
 
 export function responseCommunes(items) {
   return items.map((item) => {
-    const commune = {
+    const commune: any = {
       code: item.code,
       name: item.name,
       postcodes: item.postcodes || [],
@@ -260,7 +264,7 @@ export function mergeOutageResponses(responses) {
   };
   refreshStreetStats(stats, streets);
 
-  const merged = {
+  const merged: any = {
     updatedAt: updatedAt || new Date().toISOString(),
     source: sourceInfo(),
     query: queries[0] || {},
@@ -306,7 +310,7 @@ export function normalizeStreet(input) {
   value = value.replace(/[()]/g, " ");
   value = value.replace(/\s+/g, " ").trim();
 
-  const replacements = [
+  const replacements: Array<[RegExp, string]> = [
     [/^\/+\s*/, ""],
     [/^ET\s+/, ""],
     [/^PARKING\s+VINCI\/ROSSINI\s+\d+\s+/, ""],

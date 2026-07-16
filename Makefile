@@ -1,6 +1,6 @@
 PORT ?= 5173
 
-.PHONY: run dev build preview deploy test clean
+.PHONY: run dev build preview deploy test typecheck clean
 
 run: dev
 
@@ -18,6 +18,9 @@ deploy:
 
 test:
 	npm run test
+
+typecheck:
+	npm run typecheck
 
 clean:
 	rm -rf web .wrangler/state

@@ -50,6 +50,7 @@ Useful commands:
 
 ```sh
 npm test
+npm run typecheck
 npm run build
 npm run deploy
 ```

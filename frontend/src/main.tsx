@@ -24,7 +24,7 @@ import "./styles.css";
 const MIN_FETCH_ZOOM = 12;
 const FETCH_DEBOUNCE_MS = 900;
 const VIEWPORT_GRID = 0.01;
-const INITIAL_CENTER = [48.8566, 2.3522];
+const INITIAL_CENTER: L.LatLngTuple = [48.8566, 2.3522];
 const INITIAL_ZOOM = 12;
 
 function App() {
@@ -225,7 +225,20 @@ function GitHubLogo() {
   );
 }
 
-const MapView = forwardRef(function MapView(
+interface MapViewHandle {
+  focusStreet(streetKey: string): void;
+}
+
+interface MapViewProps {
+  data: any;
+  streets: any[];
+  activeKey: string;
+  onInteractionStart: () => void;
+  onSelectStreet: (streetKey: string) => void;
+  onViewportChange: (viewport: any) => void;
+}
+
+const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   { data, streets, activeKey, onInteractionStart, onSelectStreet, onViewportChange },
   ref,
 ) {
@@ -278,7 +291,7 @@ const MapView = forwardRef(function MapView(
     }).addTo(map);
 
     map.createPane("streetPane");
-    map.getPane("streetPane").style.zIndex = 420;
+    map.getPane("streetPane")!.style.zIndex = "420";
 
     mapRef.current = map;
     rendererRef.current = L.canvas({ pane: "streetPane", padding: 0.55, tolerance: 8 });
@@ -445,7 +458,8 @@ function Legend() {
   );
 }
 
-const StreetList = forwardRef(function StreetList({ activeKey, streets, onSelectStreet }, ref) {
+const StreetList = forwardRef<HTMLDivElement, { activeKey: string; streets: any[]; onSelectStreet: (street: any) => void }>(
+  function StreetList({ activeKey, streets, onSelectStreet }, ref) {
   if (!streets.length) {
     return (
       <div ref={ref} className="street-list empty">
@@ -486,7 +500,8 @@ const StreetList = forwardRef(function StreetList({ activeKey, streets, onSelect
       ))}
     </div>
   );
-});
+  },
+);
 
 function Tag({ type }) {
   const className = type.includes("HTA") ? "hta" : type.includes("BT") ? "bt" : "other";
@@ -804,7 +819,7 @@ function lineWeight(street) {
   return Math.min(6.6, 4.2 + Math.min(1.2, (count - 1) * 0.35));
 }
 
-function streetCasingStyle(street, emphasized = false) {
+function streetCasingStyle(street, emphasized = false): L.PolylineOptions {
   const weight = lineWeight(street) + (emphasized ? 5.4 : 4.2);
   return {
     color: "#fffdf7",
@@ -815,7 +830,7 @@ function streetCasingStyle(street, emphasized = false) {
   };
 }
 
-function streetStrokeStyle(street, emphasized = false) {
+function streetStrokeStyle(street, emphasized = false): L.PolylineOptions {
   return {
     color: markerColor(street),
     weight: lineWeight(street) + (emphasized ? 1.8 : 0),
@@ -991,4 +1006,4 @@ function useLatest(value) {
   return ref;
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")!).render(<App />);

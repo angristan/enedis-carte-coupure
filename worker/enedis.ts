@@ -24,7 +24,16 @@ export const DEFAULT_QUERY = {
 };
 
 export class EnedisClient {
-  constructor(store, traceCtx, ttlSeconds) {
+  store: any;
+  traceCtx: any;
+  ttlSeconds: number;
+  memory: Map<string, any>;
+  loadedStore: boolean;
+  loadPromise: Promise<void> | null;
+  dirty: boolean;
+  stats: { cacheHits: number; upstreamFetches: number };
+
+  constructor(store: any, traceCtx?: any, ttlSeconds = 0) {
     this.store = store;
     this.traceCtx = traceCtx;
     this.ttlSeconds = ttlSeconds;
@@ -38,7 +47,7 @@ export class EnedisClient {
     };
   }
 
-  async fetch(query, options = {}) {
+  async fetch(query: any, options: { cache?: boolean } = {}) {
     const useCache = options.cache !== false;
     if (!useCache) {
       const payload = await fetchEnedis(query, this.traceCtx);
@@ -90,7 +99,7 @@ export class EnedisClient {
     if (!cached.found || cached.value?.version !== ENEDIS_CACHE_VERSION || !cached.value.entries) return;
 
     const now = Date.now();
-    for (const [key, entry] of Object.entries(cached.value.entries)) {
+    for (const [key, entry] of Object.entries(cached.value.entries) as Array<[string, any]>) {
       if (!entry?.payload || Date.parse(entry.freshUntil) <= now) continue;
       this.memory.set(key, entry);
     }

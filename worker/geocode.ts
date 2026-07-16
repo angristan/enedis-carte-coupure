@@ -5,7 +5,13 @@ export const GEOCODE_PRIMARY_ENDPOINT = "https://data.geopf.fr/geocodage/search"
 export const GEOCODE_FALLBACK_ENDPOINT = "https://api-adresse.data.gouv.fr/search/";
 
 export class Geocoder {
-  constructor(store, traceCtx) {
+  store: any;
+  traceCtx: any;
+  memory: Map<string, any>;
+  loadedStore: boolean;
+  dirty: boolean;
+
+  constructor(store: any, traceCtx?: any) {
     this.store = store;
     this.traceCtx = traceCtx;
     this.memory = new Map();
@@ -47,7 +53,7 @@ export class Geocoder {
     this.loadedStore = true;
     const cached = await this.store.get("geocode:index", { cacheTtl: 3600 });
     if (!cached.found || !cached.value || typeof cached.value !== "object") return;
-    for (const [key, result] of Object.entries(cached.value)) {
+    for (const [key, result] of Object.entries(cached.value) as Array<[string, any]>) {
       if (result?.status === "error") continue;
       this.memory.set(key, result);
     }
@@ -55,7 +61,7 @@ export class Geocoder {
 
   async save() {
     if (!this.store || !this.dirty) return;
-    const payload = {};
+    const payload: Record<string, any> = {};
     for (const [key, result] of this.memory) {
       const { cached, ...publicResult } = result;
       if (publicResult.status === "error") continue;
@@ -82,7 +88,7 @@ export class Geocoder {
         throw new Error(`${endpoint} returned ${response.status} ${response.statusText}`);
       }
 
-      const decoded = await response.json();
+      const decoded: any = await response.json();
       const feature = decoded.features?.[0];
       if (!feature?.geometry?.coordinates || feature.geometry.coordinates.length < 2) {
         return { status: "miss", query };

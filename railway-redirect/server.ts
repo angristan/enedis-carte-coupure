@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 export const DEFAULT_TARGET = "https://enedis.stanislas.cloud";
 
-export function redirectLocation(requestTarget, target = DEFAULT_TARGET) {
+export function redirectLocation(requestTarget: string | undefined, target = DEFAULT_TARGET) {
   const targetURL = new URL(target);
   const basePath = targetURL.pathname.replace(/\/$/, "");
   const pathAndQuery = typeof requestTarget === "string" && requestTarget.startsWith("/") ? requestTarget : "/";

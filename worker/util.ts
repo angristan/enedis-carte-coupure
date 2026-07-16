@@ -1,10 +1,10 @@
-export async function sha256Hex(value) {
+export async function sha256Hex(value: string) {
   const data = new TextEncoder().encode(value);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function parseDuration(value, fallbackSeconds) {
+export function parseDuration(value: string | undefined, fallbackSeconds: number) {
   if (!value) return fallbackSeconds;
   const match = String(value).trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
   if (!match) return fallbackSeconds;
@@ -29,7 +29,7 @@ export function parseDuration(value, fallbackSeconds) {
   }
 }
 
-export async function mapLimit(items, limit, callback) {
+export async function mapLimit<T, R>(items: T[], limit: number, callback: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array(items.length);
   let nextIndex = 0;
 
@@ -50,20 +50,20 @@ export async function mapLimit(items, limit, callback) {
   return results;
 }
 
-export function uniqueSorted(values) {
+export function uniqueSorted(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
-export function addUnique(values, value) {
+export function addUnique(values: string[], value: string): void {
   if (!value || values.includes(value)) return;
   values.push(value);
 }
 
-export function stripAccents(value) {
+export function stripAccents(value: unknown): string {
   return String(value).replace(/[ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïñòóôõöùúûüýÿŒœÆæ]/g, (char) => ACCENTS[char] || char);
 }
 
-const ACCENTS = {
+const ACCENTS: Record<string, string> = {
   À: "A",
   Á: "A",
   Â: "A",
