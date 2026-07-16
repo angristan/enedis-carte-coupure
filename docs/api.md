@@ -112,6 +112,9 @@ The Worker reports application cache behavior without exposing it in the UI:
 | `X-App-Cache: MISS` | The response was fetched and stored |
 | `X-App-Cache: STALE` | A retained response was served while a background refresh started |
 | `X-App-Cache: COMMUNE` | A viewport response was composed from per-commune facts |
+| `X-App-Cache-Commune-Hits` | Number of communes served from fresh cache entries |
+| `X-App-Cache-Commune-Stale` | Number of communes served stale while refreshing in the background |
+| `X-App-Cache-Commune-Misses` | Number of communes fetched synchronously, including failed fetches |
 | `X-App-Cache-Refreshed-At` | Time the cached response was produced |
 | `X-App-Cache-Fresh-Until` | End of the response's fresh period |
 | `X-App-Cache-Refresh: background` | A stale response triggered background refresh work |

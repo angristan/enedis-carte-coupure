@@ -95,6 +95,8 @@ The API exposes its application-level cache state through headers:
 
 - `X-App-Cache: HIT`, `MISS`, or `STALE` for single-query responses;
 - `X-App-Cache: COMMUNE` for viewport responses composed from commune facts;
+- `X-App-Cache-Commune-Hits`, `X-App-Cache-Commune-Stale`, and `X-App-Cache-Commune-Misses` for the
+  per-commune breakdown of viewport responses;
 - `X-App-Cache-Refreshed-At` and `X-App-Cache-Fresh-Until` for cached response timing;
 - `X-App-Cache-Refresh: background` when stale data triggered a refresh.
 
@@ -115,14 +117,14 @@ Workers observability is enabled in `wrangler.jsonc`. The application creates sp
 - `outages.attach_geometry`
 - `geocode.lookup`
 - `streetgeom.requests` and `streetgeom.lookup`
-- `outages.refresh_stale`
+- `outages.refresh_stale` and `outages.refresh_stale_commune`
 
 Useful attributes include:
 
 - `communes.point_cache_hits`
 - `communes.point_contour_hits`
 - `communes.point_upstream_fetches`
-- `communes.responses` and `communes.warnings`
+- `communes.responses`, `communes.warnings`, and `communes.cache_*`
 - `cache.hit` and `cache.expiration_ttl`
 - `streetgeom.missing` and `streetgeom.results`
 - upstream `http.response.status_code`

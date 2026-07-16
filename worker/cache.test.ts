@@ -106,7 +106,10 @@ describe("KV cache helpers", () => {
     };
     const commune = { code: "75056", name: "Paris", postcodes: ["75001"] };
 
-    await expect(testExports.fetchCachedCommuneOutage(commune, false, null, runtime)).resolves.toBe(staleResponse);
+    await expect(testExports.fetchCachedCommuneOutage(commune, false, null, runtime)).resolves.toEqual({
+      response: staleResponse,
+      cacheStatus: "STALE",
+    });
     expect(backgroundTasks).toHaveLength(1);
     await Promise.all(backgroundTasks);
     expect(runtime.enedis.fetch).toHaveBeenCalledOnce();

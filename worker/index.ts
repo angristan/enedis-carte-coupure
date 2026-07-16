@@ -73,9 +73,12 @@ async function viewportOutages(request, bounds, runtime, ctx) {
   const includeRaw = url.searchParams.get("raw") === "1";
   const shouldGeocode = url.searchParams.get("geocode") !== "0";
   try {
-    const response = await fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime);
+    const { response, cacheStats } = await fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime);
     const httpResponse = json(response);
     httpResponse.headers.set("X-App-Cache", "COMMUNE");
+    httpResponse.headers.set("X-App-Cache-Commune-Hits", String(cacheStats.hits));
+    httpResponse.headers.set("X-App-Cache-Commune-Stale", String(cacheStats.stale));
+    httpResponse.headers.set("X-App-Cache-Commune-Misses", String(cacheStats.misses));
     return httpResponse;
   } catch (error) {
     return responseError(error, 502, "ENEDIS_FETCH_FAILED");
@@ -98,7 +101,12 @@ async function fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime) 
     runtime.traceCtx,
     runtime.communesCacheTTL,
   );
-  const { responses, warnings } = await fetchVisibleCommuneOutages(visibleCommunes, shouldGeocode, bounds, runtime);
+  const { responses, warnings, cacheStats } = await fetchVisibleCommuneOutages(
+    visibleCommunes,
+    shouldGeocode,
+    bounds,
+    runtime,
+  );
   if (responses.length === 0 && warnings.length > 0) {
     const error = Object.assign(new Error("all visible commune requests failed"), {
       status: 502,
@@ -115,27 +123,34 @@ async function fetchViewportOutages(bounds, includeRaw, shouldGeocode, runtime) 
   if (includeRaw) {
     response.warnings = [...(response.warnings || []), "raw Enedis payloads are omitted for viewport aggregation"];
   }
-  return response;
+  return { response, cacheStats };
 }
 
 async function fetchVisibleCommuneOutages(communes: any[], shouldGeocode, fallbackBounds, runtime) {
   return enterSpan(runtime.traceCtx, "outages.fetch_visible_commune_facts", { "communes.count": communes.length }, async (span) => {
     const results = await mapLimit(communes, 6, async (commune) => {
       try {
-        return {
-          response: await fetchCachedCommuneOutage(commune, shouldGeocode, fallbackBounds, runtime),
-        };
+        return await fetchCachedCommuneOutage(commune, shouldGeocode, fallbackBounds, runtime);
       } catch (error) {
         return {
+          cacheStatus: "MISS",
           warning: `${commune.name} (${commune.code}): ${error.message}`,
         };
       }
     });
-    const responses = results.filter((result) => result.response).map((result) => result.response);
-    const warnings = results.filter((result) => result.warning).map((result) => result.warning);
+    const responses = results.flatMap((result) => ("response" in result ? [result.response] : []));
+    const warnings = results.flatMap((result) => ("warning" in result ? [result.warning] : []));
+    const cacheStats = {
+      hits: results.filter((result) => result.cacheStatus === "HIT").length,
+      stale: results.filter((result) => result.cacheStatus === "STALE").length,
+      misses: results.filter((result) => result.cacheStatus === "MISS").length,
+    };
     span.setAttribute("communes.responses", responses.length);
     span.setAttribute("communes.warnings", warnings.length);
-    return { responses, warnings };
+    span.setAttribute("communes.cache_hits", cacheStats.hits);
+    span.setAttribute("communes.cache_stale", cacheStats.stale);
+    span.setAttribute("communes.cache_misses", cacheStats.misses);
+    return { responses, warnings, cacheStats };
   });
 }
 
@@ -145,7 +160,7 @@ async function fetchCachedCommuneOutage(commune, shouldGeocode, fallbackBounds, 
     const cached = await runtime.cache.get(cacheKey, { cacheTtl: 60 });
     if (cached.found && cached.value?.version === COMMUNE_OUTAGE_CACHE_VERSION) {
       if (Date.now() < Date.parse(cached.value.freshUntil)) {
-        return cached.value.response;
+        return { response: cached.value.response, cacheStatus: "HIT" };
       }
 
       const refresh = enterSpan(
@@ -155,11 +170,14 @@ async function fetchCachedCommuneOutage(commune, shouldGeocode, fallbackBounds, 
         () => refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime),
       ).catch((error) => console.error(`refresh commune outage cache ${commune.code}:`, error));
       runtime.traceCtx?.waitUntil?.(refresh);
-      return cached.value.response;
+      return { response: cached.value.response, cacheStatus: "STALE" };
     }
   }
 
-  return refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime);
+  return {
+    response: await refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime),
+    cacheStatus: "MISS",
+  };
 }
 
 async function refreshCommuneOutage(cacheKey, commune, shouldGeocode, fallbackBounds, runtime) {
