@@ -87,7 +87,7 @@ npm run build
 ## Repository layout
 
 ```text
-frontend/               React and Leaflet application
+frontend/               React and MapLibre GL application
 worker/                 Worker API and data pipeline
 railway-redirect/       Legacy Railway URL redirect service
 docs/                   Architecture, API, development, and operations guides

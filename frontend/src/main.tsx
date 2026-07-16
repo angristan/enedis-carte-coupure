@@ -8,8 +8,8 @@ import React, {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import MapGL, { Layer, NavigationControl, Popup, Source, type MapRef } from "react-map-gl/maplibre";
+import "maplibre-gl/dist/maplibre-gl.css";
 import {
   AlertTriangle,
   Clock3,
@@ -22,10 +22,11 @@ import {
 import "./styles.css";
 
 const MIN_FETCH_ZOOM = 12;
-const FETCH_DEBOUNCE_MS = 900;
 const VIEWPORT_GRID = 0.01;
-const INITIAL_CENTER: L.LatLngTuple = [48.8566, 2.3522];
+const INITIAL_CENTER = { latitude: 48.8566, longitude: 2.3522 };
 const INITIAL_ZOOM = 12;
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const OUTAGE_SOURCE_ID = "outage-streets";
 
 function App() {
   const [data, setData] = useState(null);
@@ -238,143 +239,216 @@ interface MapViewProps {
   onViewportChange: (viewport: any) => void;
 }
 
+const POLYGON_FILL_LAYER: any = {
+  id: "outage-area-fill",
+  type: "fill",
+  paint: { "fill-color": "#5db79e", "fill-opacity": 0.07 },
+};
+
+const POLYGON_LINE_LAYER: any = {
+  id: "outage-area-line",
+  type: "line",
+  paint: { "line-color": "#277783", "line-width": 1.3, "line-opacity": 0.65 },
+};
+
+const STREET_CASING_LAYER: any = {
+  id: "outage-street-casing",
+  type: "line",
+  filter: ["==", ["geometry-type"], "LineString"],
+  layout: { "line-cap": "round", "line-join": "round" },
+  paint: {
+    "line-color": "#fffdf7",
+    "line-opacity": ["case", ["boolean", ["feature-state", "hovered"], false], 0.98, 0.86],
+    "line-width": [
+      "+",
+      ["get", "lineWidth"],
+      ["case", ["boolean", ["get", "selected"], false], 5.4, ["boolean", ["feature-state", "hovered"], false], 5.4, 4.2],
+    ],
+  },
+};
+
+const STREET_LINE_LAYER: any = {
+  id: "outage-street-line",
+  type: "line",
+  filter: ["==", ["geometry-type"], "LineString"],
+  layout: { "line-cap": "round", "line-join": "round" },
+  paint: {
+    "line-color": ["get", "color"],
+    "line-opacity": 0.94,
+    "line-width": [
+      "+",
+      ["get", "lineWidth"],
+      ["case", ["boolean", ["get", "selected"], false], 1.8, ["boolean", ["feature-state", "hovered"], false], 1.8, 0],
+    ],
+  },
+};
+
+const STREET_POINT_LAYER: any = {
+  id: "outage-street-point",
+  type: "circle",
+  filter: ["==", ["geometry-type"], "Point"],
+  paint: {
+    "circle-color": ["get", "color"],
+    "circle-opacity": 0.86,
+    "circle-radius": ["+", ["get", "radius"], ["case", ["boolean", ["get", "selected"], false], 2, 0]],
+    "circle-stroke-color": "#ffffff",
+    "circle-stroke-opacity": 0.96,
+    "circle-stroke-width": 3,
+  },
+};
+
 const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   { data, streets, activeKey, onInteractionStart, onSelectStreet, onViewportChange },
   ref,
 ) {
-  const shellRef = useRef(null);
-  const mapNodeRef = useRef(null);
-  const mapRef = useRef(null);
-  const rendererRef = useRef(null);
-  const outageLayerRef = useRef(null);
-  const polygonLayerRef = useRef(null);
-  const layerByKeyRef = useRef(new Map());
-  const activeKeyRef = useLatest(activeKey);
-  const callbacksRef = useLatest({ onInteractionStart, onSelectStreet, onViewportChange });
+  const mapRef = useRef<MapRef>(null);
+  const hoveredKeyRef = useRef("");
+  const streetByKey = useMemo(() => new Map(streets.map((street) => [street.key, street])), [streets]);
+  const outageGeoJSON = useMemo(() => streetFeatureCollection(streets, activeKey), [activeKey, streets]);
   const [hover, setHover] = useState(null);
+  const [popup, setPopup] = useState(null);
+
+  const clearHover = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (map?.getSource(OUTAGE_SOURCE_ID) && hoveredKeyRef.current) {
+      map.setFeatureState({ source: OUTAGE_SOURCE_ID, id: hoveredKeyRef.current }, { hovered: false });
+    }
+    hoveredKeyRef.current = "";
+    setHover(null);
+  }, []);
+
+  const setHoveredStreet = useCallback((streetKey) => {
+    const map = mapRef.current?.getMap();
+    if (!map?.getSource(OUTAGE_SOURCE_ID) || hoveredKeyRef.current === streetKey) return;
+    if (hoveredKeyRef.current) {
+      map.setFeatureState({ source: OUTAGE_SOURCE_ID, id: hoveredKeyRef.current }, { hovered: false });
+    }
+    hoveredKeyRef.current = streetKey;
+    if (streetKey) map.setFeatureState({ source: OUTAGE_SOURCE_ID, id: streetKey }, { hovered: true });
+  }, []);
 
   useImperativeHandle(
     ref,
     () => ({
       focusStreet(streetKey) {
-        const entry = layerByKeyRef.current.get(streetKey);
-        if (!entry) return;
-        focusEntry(mapRef.current, entry);
-        window.setTimeout(() => entry.popupTarget?.openPopup(), 220);
+        const map = mapRef.current?.getMap();
+        const street = streetByKey.get(streetKey);
+        if (!map || !street) return;
+        const bounds = streetBounds(street);
+        if (bounds) {
+          map.fitBounds(
+            [
+              [bounds.west, bounds.south],
+              [bounds.east, bounds.north],
+            ],
+            { padding: mapPadding(), maxZoom: 17.5, duration: 620 },
+          );
+          setPopup({ street, longitude: (bounds.west + bounds.east) / 2, latitude: (bounds.south + bounds.north) / 2 });
+        }
       },
     }),
-    [],
+    [streetByKey],
   );
 
-  useEffect(() => {
-    if (!mapNodeRef.current) return undefined;
+  const findStreetFeature = useCallback((event, radius) => {
+    const map = mapRef.current?.getMap();
+    if (!map) return null;
+    const { x, y } = event.point;
+    return map.queryRenderedFeatures(
+      [
+        [x - radius, y - radius],
+        [x + radius, y + radius],
+      ] as any,
+      { layers: [STREET_LINE_LAYER.id, STREET_POINT_LAYER.id] },
+    )[0];
+  }, []);
 
-    const map = L.map(mapNodeRef.current, {
-      zoomControl: false,
-      easeLinearity: 0.22,
-      inertia: true,
-      inertiaDeceleration: 2600,
-      inertiaMaxSpeed: 1600,
-      markerZoomAnimation: false,
-      preferCanvas: true,
-      wheelDebounceTime: 24,
-      wheelPxPerZoomLevel: 92,
-      zoomAnimation: true,
-      zoomDelta: 0.5,
-      zoomSnap: 0.25,
-    }).setView(INITIAL_CENTER, INITIAL_ZOOM);
+  const handlePointerMove = useCallback(
+    (event) => {
+      if (window.matchMedia("(pointer: coarse)").matches) return;
+      const feature = findStreetFeature(event, 6);
+      const streetKey = String(feature?.id ?? feature?.properties?.key ?? "");
+      if (!streetKey) {
+        clearHover();
+        return;
+      }
+      setHoveredStreet(streetKey);
+      setHover({ label: feature.properties?.label || "", x: event.point.x, y: event.point.y - 10 });
+    },
+    [clearHover, findStreetFeature, setHoveredStreet],
+  );
 
-    L.control.zoom({ position: "bottomleft" }).addTo(map);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
+  const handleMapClick = useCallback(
+    (event) => {
+      const feature = findStreetFeature(event, 10);
+      const streetKey = String(feature?.id ?? feature?.properties?.key ?? "");
+      const street = streetByKey.get(streetKey);
+      if (!street) return;
+      onSelectStreet(streetKey);
+      setPopup({ street, longitude: event.lngLat.lng, latitude: event.lngLat.lat });
+    },
+    [findStreetFeature, onSelectStreet, streetByKey],
+  );
 
-    map.createPane("streetPane");
-    map.getPane("streetPane")!.style.zIndex = "420";
-
-    mapRef.current = map;
-    rendererRef.current = L.canvas({ pane: "streetPane", padding: 0.55, tolerance: 8 });
-    outageLayerRef.current = L.layerGroup().addTo(map);
-    polygonLayerRef.current = L.layerGroup().addTo(map);
-
-    let loadTimer = 0;
-    const emitViewport = () => callbacksRef.current.onViewportChange?.(viewportFromMap(map));
-    const scheduleViewportLoad = () => {
-      window.clearTimeout(loadTimer);
-      loadTimer = window.setTimeout(emitViewport, FETCH_DEBOUNCE_MS);
-    };
-    const beginInteraction = () => {
-      window.clearTimeout(loadTimer);
-      setHover(null);
-      callbacksRef.current.onInteractionStart?.();
-    };
-
-    map.on("moveend", scheduleViewportLoad);
-    map.on("movestart zoomstart popupopen", beginInteraction);
-    window.setTimeout(emitViewport, 0);
-
-    return () => {
-      window.clearTimeout(loadTimer);
-      map.remove();
-      mapRef.current = null;
-      rendererRef.current = null;
-      outageLayerRef.current = null;
-      polygonLayerRef.current = null;
-      layerByKeyRef.current.clear();
-    };
-  }, [callbacksRef]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const outageLayer = outageLayerRef.current;
-    const polygonLayer = polygonLayerRef.current;
-    const renderer = rendererRef.current;
-    if (!map || !outageLayer || !polygonLayer || !renderer) return;
-
-    outageLayer.clearLayers();
-    polygonLayer.clearLayers();
-    layerByKeyRef.current.clear();
-    setHover(null);
-
-    if (data?.polygon?.features?.length) {
-      L.geoJSON(data.polygon, {
-        style: {
-          color: "#277783",
-          weight: 1.3,
-          opacity: 0.65,
-          fillColor: "#5db79e",
-          fillOpacity: 0.07,
-        },
-        interactive: false,
-      }).addTo(polygonLayer);
-    }
-
-    for (const street of streets) {
-      const entry = createStreetEntry({
-        street,
-        renderer,
-        activeKeyRef,
-        mapShell: shellRef.current,
-        onHover: setHover,
-        onSelect: callbacksRef.current.onSelectStreet,
-      });
-      if (!entry) continue;
-      entry.layer.addTo(outageLayer);
-      layerByKeyRef.current.set(street.key, entry);
-      applyStreetStyle(entry, activeKeyRef.current);
-    }
-
-    window.requestAnimationFrame(() => map.invalidateSize());
-  }, [activeKeyRef, callbacksRef, data, streets]);
-
-  useEffect(() => {
-    for (const entry of layerByKeyRef.current.values()) applyStreetStyle(entry, activeKey);
-  }, [activeKey]);
+  const handleInteractionStart = useCallback(() => {
+    clearHover();
+    setPopup(null);
+    onInteractionStart();
+  }, [clearHover, onInteractionStart]);
 
   return (
-    <div ref={shellRef} className="map-canvas-shell">
-      <div ref={mapNodeRef} className="map-canvas" />
+    <div className="map-canvas-shell">
+      <MapGL
+        ref={mapRef}
+        cursor={hover ? "pointer" : undefined}
+        dragRotate={false}
+        initialViewState={{ ...INITIAL_CENTER, zoom: INITIAL_ZOOM }}
+        mapStyle={MAP_STYLE}
+        maxPitch={0}
+        maxZoom={19}
+        minZoom={4}
+        onClick={handleMapClick}
+        onLoad={(event) => onViewportChange(viewportFromMap(event.target))}
+        onMouseLeave={clearHover}
+        onMouseMove={handlePointerMove}
+        onMoveEnd={(event) => onViewportChange(viewportFromMap(event.target))}
+        onMoveStart={handleInteractionStart}
+        pitchWithRotate={false}
+        reuseMaps
+        style={{ width: "100%", height: "100%" }}
+        touchPitch={false}
+      >
+        <NavigationControl position="bottom-left" showCompass={false} />
+
+        {data?.polygon?.features?.length ? (
+          <Source id="outage-area" type="geojson" data={data.polygon}>
+            <Layer {...POLYGON_FILL_LAYER} />
+            <Layer {...POLYGON_LINE_LAYER} />
+          </Source>
+        ) : null}
+
+        <Source id={OUTAGE_SOURCE_ID} type="geojson" data={outageGeoJSON as any} promoteId="key">
+          <Layer {...STREET_CASING_LAYER} />
+          <Layer {...STREET_LINE_LAYER} />
+          <Layer {...STREET_POINT_LAYER} />
+        </Source>
+
+        {popup ? (
+          <Popup
+            anchor="bottom"
+            closeButton
+            closeOnClick={false}
+            latitude={popup.latitude}
+            longitude={popup.longitude}
+            maxWidth="320px"
+            offset={12}
+            onClose={() => setPopup(null)}
+          >
+            <StreetPopup street={popup.street} />
+          </Popup>
+        ) : null}
+      </MapGL>
+
       {hover ? (
         <div className="map-hover-label" style={{ left: hover.x, top: hover.y }}>
           {hover.label}
@@ -508,149 +582,74 @@ function Tag({ type }) {
   return <span className={`tag ${className}`}>{type.replace("Incident ", "")}</span>;
 }
 
-function createStreetEntry({ street, renderer, activeKeyRef, mapShell, onHover, onSelect }) {
-  if (hasGeometry(street)) {
-    return createGeometryEntry({ street, renderer, activeKeyRef, mapShell, onHover, onSelect });
-  }
-  if (street.geocode?.status === "ok") return createPointEntry({ street, renderer, mapShell, onHover });
-  return null;
+function StreetPopup({ street }) {
+  return (
+    <div className="popup">
+      <strong>{street.label}</strong>
+      <span>{detailText(street)}</span>
+      <div>
+        {(street.outageTypes || []).map((type) => (
+          <Tag key={type} type={type} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
-function createGeometryEntry({ street, renderer, activeKeyRef, mapShell, onHover, onSelect }) {
-  const group = L.featureGroup();
-  const bounds = [];
-  const casings = [];
-  const strokes = [];
-  const hitAreas = [];
-  let popupTarget = null;
-  const lines = mergedGeometryLines(street);
-
-  for (const coords of lines) {
-    bounds.push(...coords);
-
-    const casing = L.polyline(coords, {
-      ...streetCasingStyle(street),
-      renderer,
-      interactive: false,
-      smoothFactor: 2.2,
-    }).addTo(group);
-    casings.push(casing);
-
-    const stroke = L.polyline(coords, {
-      ...streetStrokeStyle(street),
-      renderer,
-      interactive: false,
-      smoothFactor: 2.2,
-    }).addTo(group);
-    strokes.push(stroke);
-
-    const hitArea = L.polyline(coords, {
-      color: "#000000",
-      weight: hitWeight(),
-      opacity: 0,
-      lineCap: "round",
-      lineJoin: "round",
-      renderer,
-      smoothFactor: 2.2,
-    }).addTo(group);
-    hitArea.bindPopup(popupHtml(street));
-    hitAreas.push(hitArea);
-    popupTarget ||= hitArea;
+function streetFeatureCollection(streets, activeKey) {
+  const features = [];
+  for (const street of streets) {
+    const properties = {
+      key: street.key,
+      label: street.label,
+      color: markerColor(street),
+      lineWidth: lineWeight(street),
+      radius: markerRadius(street),
+      selected: street.key === activeKey,
+    };
+    const lines = hasGeometry(street) ? mergedGeometryLines(street) : [];
+    if (lines.length) {
+      features.push({
+        type: "Feature",
+        id: street.key,
+        properties,
+        geometry: { type: "MultiLineString", coordinates: lines },
+      });
+    } else if (street.geocode?.status === "ok") {
+      features.push({
+        type: "Feature",
+        id: street.key,
+        properties,
+        geometry: { type: "Point", coordinates: [street.geocode.lng, street.geocode.lat] },
+      });
+    }
   }
-
-  if (!bounds.length) return createPointEntry({ street, renderer, mapShell, onHover });
-
-  const entry = { layer: group, popupTarget, bounds, street, casings, strokes, hitAreas, hovered: false };
-  for (const hitArea of hitAreas) {
-    hitArea.on("mouseover", (event) => {
-      entry.hovered = true;
-      bringStreetToFront(entry);
-      applyStreetStyle(entry, activeKeyRef.current);
-      showHoverLabel({ street, event, mapShell, onHover });
-    });
-    hitArea.on("mousemove", (event) => showHoverLabel({ street, event, mapShell, onHover }));
-    hitArea.on("mouseout", () => {
-      entry.hovered = false;
-      applyStreetStyle(entry, activeKeyRef.current);
-      onHover(null);
-    });
-    hitArea.on("click", () => {
-      onHover(null);
-      onSelect?.(street.key);
-      window.setTimeout(() => popupTarget?.openPopup(), 0);
-    });
-  }
-  return entry;
+  return { type: "FeatureCollection", features };
 }
 
-function createPointEntry({ street, renderer, mapShell, onHover }) {
-  const marker = L.circleMarker([street.geocode.lat, street.geocode.lng], {
-    radius: markerRadius(street),
-    color: "#ffffff",
-    fillColor: markerColor(street),
-    fillOpacity: 0.84,
-    opacity: 0.96,
-    renderer,
-    weight: 3,
-  });
-  marker.bindPopup(popupHtml(street));
-  marker.on("mouseover", (event) => showHoverLabel({ street, event, mapShell, onHover }));
-  marker.on("mousemove", (event) => showHoverLabel({ street, event, mapShell, onHover }));
-  marker.on("mouseout", () => onHover(null));
-  marker.on("click", () => onHover(null));
+function streetBounds(street) {
+  const lines = hasGeometry(street) ? mergedGeometryLines(street) : [];
+  if (lines.length) {
+    const bounds = { south: Infinity, west: Infinity, north: -Infinity, east: -Infinity };
+    for (const line of lines) {
+      for (const [lng, lat] of line) {
+        bounds.south = Math.min(bounds.south, lat);
+        bounds.west = Math.min(bounds.west, lng);
+        bounds.north = Math.max(bounds.north, lat);
+        bounds.east = Math.max(bounds.east, lng);
+      }
+    }
+    return Number.isFinite(bounds.south) ? bounds : null;
+  }
+  if (street.geocode?.status !== "ok") return null;
   return {
-    layer: marker,
-    popupTarget: marker,
-    bounds: [[street.geocode.lat, street.geocode.lng]],
-    street,
+    south: street.geocode.lat,
+    west: street.geocode.lng,
+    north: street.geocode.lat,
+    east: street.geocode.lng,
   };
 }
 
-function focusEntry(map, entry) {
-  if (!map) return;
-  if (entry.layer.getBounds) {
-    const layerBounds = entry.layer.getBounds();
-    if (layerBounds.isValid()) {
-      map.fitBounds(layerBounds, {
-        padding: mapPadding(),
-        maxZoom: 17.5,
-        animate: true,
-        duration: 0.62,
-        easeLinearity: 0.22,
-      });
-      return;
-    }
-  }
-  if (entry.layer.getLatLng) {
-    map.setView(entry.layer.getLatLng(), 16, { animate: true, duration: 0.62, easeLinearity: 0.22 });
-  }
-}
-
-function showHoverLabel({ street, event, mapShell, onHover }) {
-  if (!mapShell || window.matchMedia("(pointer: coarse)").matches) return;
-  const pointer = event.originalEvent || event;
-  if (!Number.isFinite(pointer.clientX) || !Number.isFinite(pointer.clientY)) return;
-
-  const rect = mapShell.getBoundingClientRect();
-  const x = clamp(pointer.clientX - rect.left, 14, rect.width - 14);
-  const y = clamp(pointer.clientY - rect.top - 16, 24, rect.height - 14);
-  onHover({ label: street.label, x, y });
-}
-
-function applyStreetStyle(entry, activeKey) {
-  if (!entry.strokes?.length) return;
-  const emphasized = entry.hovered || entry.street.key === activeKey;
-  const casingStyle = streetCasingStyle(entry.street, emphasized);
-  const strokeStyle = streetStrokeStyle(entry.street, emphasized);
-  for (const casing of entry.casings) casing.setStyle(casingStyle);
-  for (const stroke of entry.strokes) stroke.setStyle(strokeStyle);
-}
-
-function bringStreetToFront(entry) {
-  for (const layer of [...(entry.casings || []), ...(entry.strokes || []), ...(entry.hitAreas || [])]) {
-    layer.bringToFront?.();
-  }
-}
 
 function viewportFromMap(map) {
   const bounds = map.getBounds();
@@ -792,7 +791,7 @@ function filterStreets(streets, activeFilter, query) {
 function lineCoords(line) {
   return line
     .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
-    .map((point) => [point.lat, point.lng]);
+    .map((point) => [point.lng, point.lat]);
 }
 
 function hasMapLayer(street) {
@@ -817,31 +816,6 @@ function markerRadius(street) {
 function lineWeight(street) {
   const count = street.outageIds?.length || 1;
   return Math.min(6.6, 4.2 + Math.min(1.2, (count - 1) * 0.35));
-}
-
-function streetCasingStyle(street, emphasized = false): L.PolylineOptions {
-  const weight = lineWeight(street) + (emphasized ? 5.4 : 4.2);
-  return {
-    color: "#fffdf7",
-    weight,
-    opacity: emphasized ? 0.96 : 0.84,
-    lineCap: "round",
-    lineJoin: "round",
-  };
-}
-
-function streetStrokeStyle(street, emphasized = false): L.PolylineOptions {
-  return {
-    color: markerColor(street),
-    weight: lineWeight(street) + (emphasized ? 1.8 : 0),
-    opacity: emphasized ? 1 : 0.91,
-    lineCap: "round",
-    lineJoin: "round",
-  };
-}
-
-function hitWeight() {
-  return Math.max(18, lineWeight({ outageIds: [] }) + 12);
 }
 
 function mergedGeometryLines(street) {
@@ -909,7 +883,7 @@ function pointsClose(a, b, tolerance) {
 }
 
 function mapPadding() {
-  return window.matchMedia("(max-width: 640px)").matches ? [30, 30] : [64, 64];
+  return window.matchMedia("(max-width: 640px)").matches ? 30 : 64;
 }
 
 function detailText(street) {
@@ -929,22 +903,6 @@ function streetRestoreText(street) {
   if (street.estimatedRestoreAt) parts.push(`retour ${street.estimatedRestoreAt}`);
   if (!hasGeometry(street) && street.geocode?.status !== "ok") parts.push("non géocodée");
   return parts.join(" · ");
-}
-
-function popupHtml(street) {
-  const tags = (street.outageTypes || [])
-    .map((type) => {
-      const className = type.includes("HTA") ? "hta" : type.includes("BT") ? "bt" : "other";
-      return `<span class="tag ${className}">${escapeHtml(type.replace("Incident ", ""))}</span>`;
-    })
-    .join("");
-  return `
-    <div class="popup">
-      <strong>${escapeHtml(street.label)}</strong>
-      <span>${escapeHtml(detailText(street))}</span>
-      <div>${tags}</div>
-    </div>
-  `;
 }
 
 function buildStatusText(payload) {
@@ -982,20 +940,6 @@ function formatTime(value) {
     day: "2-digit",
     month: "2-digit",
   }).format(new Date(value));
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function clamp(value, min, max) {
-  if (max < min) return value;
-  return Math.min(max, Math.max(min, value));
 }
 
 function useLatest(value) {

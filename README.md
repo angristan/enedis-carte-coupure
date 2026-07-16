@@ -6,7 +6,7 @@ An interactive map of streets currently affected by Enedis power outages in Fran
 
 Enedis publishes useful outage data, but its public map does not draw every affected street at once. This project
 collects the public data for the communes visible on the map, normalizes the affected addresses, geocodes the
-streets, retrieves their OpenStreetMap geometry, and renders the complete result in Leaflet.
+streets, retrieves their OpenStreetMap geometry, and renders the complete result with MapLibre GL.
 
 ## Highlights
 

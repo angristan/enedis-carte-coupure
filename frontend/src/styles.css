@@ -608,43 +608,48 @@ button {
   margin-right: 4px;
 }
 
-.leaflet-container {
+.maplibregl-map {
   font-family: inherit;
 }
 
-.leaflet-control-zoom {
+.maplibregl-canvas:focus {
+  outline: none;
+}
+
+.maplibregl-ctrl-group {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 8px 20px rgba(18, 31, 35, 0.16);
 }
 
-.leaflet-control-zoom a {
-  color: var(--ink);
+.maplibregl-ctrl-group button {
+  width: 34px;
+  height: 34px;
   border-bottom-color: var(--line);
 }
 
-.leaflet-control-attribution {
+.maplibregl-ctrl-attrib {
   color: var(--muted);
   font-size: 10px;
   background: rgba(255, 255, 255, 0.82);
 }
 
-.leaflet-control-attribution a {
+.maplibregl-ctrl-attrib a {
   color: var(--teal);
 }
 
-.leaflet-popup-content-wrapper,
-.leaflet-popup-tip {
+.maplibregl-popup-content {
+  padding: 12px 14px;
   border-radius: 8px;
-}
-
-.leaflet-popup-content-wrapper {
   box-shadow: 0 10px 26px rgba(18, 31, 35, 0.18);
 }
 
-.leaflet-street-pane {
-  will-change: transform;
+.maplibregl-popup-close-button {
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  font-size: 20px;
 }
 
 .spin {
