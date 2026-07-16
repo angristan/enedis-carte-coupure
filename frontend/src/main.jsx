@@ -13,7 +13,6 @@ import "leaflet/dist/leaflet.css";
 import {
   AlertTriangle,
   Clock3,
-  Loader2,
   MapPinned,
   RadioTower,
   RotateCw,
@@ -31,7 +30,6 @@ const INITIAL_ZOOM = 12;
 function App() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("Chargement des coupures dans la vue...");
-  const [cacheStatus, setCacheStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
   const [query, setQuery] = useState("");
@@ -41,8 +39,8 @@ function App() {
   const abortRef = useRef(null);
   const dataRef = useLatest(data);
   const viewportRef = useLatest(viewport);
-  const lastLoadedKeyRef = useRef("");
-  const activeRequestKeyRef = useRef("");
+  const lastLoadedRequestRef = useRef(null);
+  const activeRequestRef = useRef(null);
   const mapRef = useRef(null);
   const listRef = useRef(null);
 
@@ -52,22 +50,26 @@ function App() {
 
       if (nextViewport.zoom < MIN_FETCH_ZOOM) {
         abortRef.current?.abort();
-        activeRequestKeyRef.current = "";
+        activeRequestRef.current = null;
+        lastLoadedRequestRef.current = null;
         setLoading(false);
         setData(null);
-        setCacheStatus("");
         setStatus("Zoomez pour charger les rues touchées dans la vue.");
         return;
       }
 
       const request = viewportRequest(nextViewport.bounds);
-      if (!force && request.key === lastLoadedKeyRef.current && dataRef.current) return;
-      if (!force && request.key === activeRequestKeyRef.current) return;
+      const lastLoadedRequest = lastLoadedRequestRef.current;
+      if (!force && dataRef.current && lastLoadedRequest && coverageContains(lastLoadedRequest, request.bounds)) {
+        return;
+      }
+      const activeRequest = activeRequestRef.current;
+      if (!force && activeRequest && boundsContain(activeRequest.bounds, request.bounds)) return;
 
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      activeRequestKeyRef.current = request.key;
+      activeRequestRef.current = request;
       setLoading(true);
       setStatus("Chargement des coupures dans la vue...");
 
@@ -76,25 +78,22 @@ function App() {
           signal: controller.signal,
           headers: { accept: "application/json" },
         });
-        const responseCacheStatus = response.headers.get("X-App-Cache") || "";
         if (!response.ok) throw new Error(await errorMessage(response));
 
         const payload = await response.json();
         if (abortRef.current !== controller) return;
         setData(payload);
-        setCacheStatus(responseCacheStatus);
         setStatus(buildStatusText(payload));
-        lastLoadedKeyRef.current = request.key;
+        lastLoadedRequestRef.current = responseCoverage(request, payload);
       } catch (error) {
         if (error.name !== "AbortError" && abortRef.current === controller) {
           setData(null);
-          setCacheStatus("");
           setStatus(`Erreur: ${error.message}`);
         }
       } finally {
         if (abortRef.current === controller) {
           abortRef.current = null;
-          activeRequestKeyRef.current = "";
+          activeRequestRef.current = null;
           setLoading(false);
         }
       }
@@ -119,6 +118,7 @@ function App() {
 
   const handleInteractionStart = useCallback(() => {
     abortRef.current?.abort();
+    activeRequestRef.current = null;
   }, []);
 
   const handleSelectStreet = useCallback((streetKey) => {
@@ -180,7 +180,6 @@ function App() {
             <p className="eyebrow">Vue active</p>
             <h2>{formatNumber(filteredStreets.length)} rues visibles</h2>
           </div>
-          <CacheBadge cacheStatus={cacheStatus} loading={loading} />
         </div>
 
         <label className="search-box">
@@ -391,19 +390,6 @@ function Stat({ icon: Icon, value, label }) {
       <small>{label}</small>
     </div>
   );
-}
-
-function CacheBadge({ cacheStatus, loading }) {
-  if (loading) {
-    return (
-      <span className="cache-badge loading">
-        <Loader2 size={14} aria-hidden="true" className="spin" />
-        sync
-      </span>
-    );
-  }
-  if (!cacheStatus) return <span className="cache-badge neutral">live</span>;
-  return <span className={`cache-badge ${cacheStatus.toLowerCase()}`}>{cacheStatus.toLowerCase()}</span>;
 }
 
 function SegmentedFilter({ activeFilter, onChange }) {
@@ -672,9 +658,92 @@ function viewportRequest(bounds) {
   params.set("north", snapped.north.toFixed(4));
   params.set("east", snapped.east.toFixed(4));
   return {
+    bounds: snapped,
     params,
     key: params.toString(),
   };
+}
+
+function responseCoverage(request, payload) {
+  return {
+    bounds: request.bounds,
+    communes: payload?.communes || [],
+  };
+}
+
+function coverageContains(coverage, bounds) {
+  if (!coverage) return false;
+  if (coverage.communes?.some((commune) => commune.contour)) {
+    return boundsInsideCommuneContours(bounds, coverage.communes);
+  }
+  return boundsContain(coverage.bounds, bounds);
+}
+
+function boundsContain(outer, inner) {
+  const epsilon = 1e-9;
+  return (
+    outer.south <= inner.south + epsilon &&
+    outer.west <= inner.west + epsilon &&
+    outer.north >= inner.north - epsilon &&
+    outer.east >= inner.east - epsilon
+  );
+}
+
+function boundsInsideCommuneContours(bounds, communes) {
+  const contours = communes.map((commune) => commune.contour).filter(Boolean);
+  if (contours.length === 0) return false;
+  return boundsSamplePoints(bounds).every((point) => contours.some((contour) => pointInGeometry(point, contour)));
+}
+
+function boundsSamplePoints(bounds) {
+  const midLat = (bounds.south + bounds.north) / 2;
+  const midLng = (bounds.west + bounds.east) / 2;
+  return [
+    { lat: bounds.south, lng: bounds.west },
+    { lat: bounds.south, lng: midLng },
+    { lat: bounds.south, lng: bounds.east },
+    { lat: midLat, lng: bounds.west },
+    { lat: midLat, lng: midLng },
+    { lat: midLat, lng: bounds.east },
+    { lat: bounds.north, lng: bounds.west },
+    { lat: bounds.north, lng: midLng },
+    { lat: bounds.north, lng: bounds.east },
+  ];
+}
+
+function pointInGeometry(point, geometry) {
+  if (geometry?.type === "Polygon") {
+    return pointInPolygon(point, geometry.coordinates);
+  }
+  if (geometry?.type === "MultiPolygon") {
+    return (geometry.coordinates || []).some((polygon) => pointInPolygon(point, polygon));
+  }
+  return false;
+}
+
+function pointInPolygon(point, rings) {
+  if (!rings?.length || !pointInRing(point, rings[0])) return false;
+  return !(rings.slice(1) || []).some((ring) => pointInRing(point, ring));
+}
+
+function pointInRing(point, ring) {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+    const currentPoint = ring[index];
+    const previousPoint = ring[previous];
+    const currentLng = currentPoint[0];
+    const currentLat = currentPoint[1];
+    const previousLng = previousPoint[0];
+    const previousLat = previousPoint[1];
+    if (!Number.isFinite(currentLat) || !Number.isFinite(currentLng) || !Number.isFinite(previousLat) || !Number.isFinite(previousLng)) {
+      continue;
+    }
+    const intersects =
+      currentLat > point.lat !== previousLat > point.lat &&
+      point.lng < ((previousLng - currentLng) * (point.lat - currentLat)) / (previousLat - currentLat) + currentLng;
+    if (intersects) inside = !inside;
+  }
+  return inside;
 }
 
 function snapBounds(bounds, grid) {

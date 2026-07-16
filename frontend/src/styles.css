@@ -296,40 +296,6 @@ button {
   letter-spacing: 0;
 }
 
-.cache-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 26px;
-  padding: 3px 8px;
-  color: var(--teal-ink);
-  font-size: 12px;
-  font-weight: 760;
-  background: var(--teal-soft);
-  border: 1px solid rgba(8, 123, 114, 0.18);
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.cache-badge.miss,
-.cache-badge.loading {
-  color: #7a3d00;
-  background: var(--orange-soft);
-  border-color: rgba(219, 113, 0, 0.2);
-}
-
-.cache-badge.stale {
-  color: #345875;
-  background: var(--blue-soft);
-  border-color: rgba(47, 111, 159, 0.18);
-}
-
-.cache-badge.neutral {
-  color: var(--muted);
-  background: var(--soft);
-  border-color: var(--line);
-}
-
 .search-box {
   position: relative;
   display: flex;
@@ -832,8 +798,7 @@ button {
     grid-template-rows: minmax(250px, 40dvh) minmax(0, 60dvh);
   }
 
-  .brand-copy p,
-  .cache-badge {
+  .brand-copy p {
     display: none;
   }
 

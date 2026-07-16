@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "healthcheckPath": "/api/health",
+    "healthcheckPath": "/healthz",
     "healthcheckTimeout": 90,
     "limitOverride": {
       "containers": {

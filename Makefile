@@ -1,29 +1,23 @@
-PORT ?= 5177
-GOCACHE ?= $(CURDIR)/.gocache
-REDIS_ADDR ?= localhost:6379
+PORT ?= 5173
 
-.PHONY: run redis build frontend-build frontend-dev test fmt clean
+.PHONY: run dev build preview deploy test clean
 
-run: frontend-build
-	GOCACHE=$(GOCACHE) go run ./cmd/server -addr :$(PORT) -redis-addr $(REDIS_ADDR)
+run: dev
 
-redis:
-	redis-server --save "" --appendonly no --dir /tmp
+dev:
+	npm run dev -- --host 127.0.0.1 --port $(PORT)
 
-build: frontend-build
-	GOCACHE=$(GOCACHE) go build -o bin/enedis-carte-coupure ./cmd/server
-
-frontend-build:
+build:
 	npm run build
 
-frontend-dev:
-	npm run dev
+preview:
+	npm run preview -- --host 127.0.0.1 --port $(PORT)
+
+deploy:
+	npm run deploy
 
 test:
-	GOCACHE=$(GOCACHE) go test ./...
-
-fmt:
-	gofmt -w ./cmd ./internal
+	npm run test
 
 clean:
-	rm -rf bin .gocache
+	rm -rf web .wrangler/state
