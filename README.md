@@ -36,11 +36,11 @@ The Worker serves `/api/health`, `/api/outages`, and the built React application
 
 ## Quick start
 
-Requires Node.js 22 or newer.
+Requires [Bun](https://bun.sh/) 1.3.9.
 
 ```sh
-npm ci
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The Cloudflare Vite plugin runs the frontend and Worker
@@ -49,10 +49,10 @@ together in the local `workerd` runtime.
 Useful commands:
 
 ```sh
-npm test
-npm run typecheck
-npm run build
-npm run deploy
+bun run test
+bun run typecheck
+bun run build
+bun run deploy
 ```
 
 Wrangler authentication is required for deployment. Local KV state is stored under `.wrangler/state` and is not

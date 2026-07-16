@@ -2,8 +2,7 @@
 
 ## Requirements
 
-- Node.js 22 or newer
-- npm
+- Bun 1.3.9
 - Wrangler authentication for deployments
 
 Local development runs entirely through the Cloudflare Vite plugin. A separate Go server or Redis process is not
@@ -12,8 +11,8 @@ required.
 ## Install and run
 
 ```sh
-npm ci
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
@@ -25,13 +24,13 @@ under `.wrangler/state`.
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start the local Worker and Vite development server |
-| `npm test` | Run Worker and Railway redirect tests with Vitest |
-| `npm run typecheck` | Type-check the frontend, Worker, tests, and tooling |
-| `npm run build` | Test, type-check, and build the Worker bundle and static assets |
-| `npm run build:redirect` | Compile the Railway redirect service to JavaScript |
-| `npm run preview` | Preview the production Vite build locally |
-| `npm run deploy` | Build and deploy with Wrangler |
+| `bun run dev` | Start the local Worker and Vite development server |
+| `bun run test` | Run Worker and Railway redirect tests with Vitest |
+| `bun run typecheck` | Type-check the frontend, Worker, tests, and tooling |
+| `bun run build` | Test, type-check, and build the Worker bundle and static assets |
+| `bun run build:redirect` | Compile the Railway redirect service to JavaScript |
+| `bun run preview` | Preview the production Vite build locally |
+| `bun run deploy` | Build and deploy with Wrangler |
 | `make dev` | Makefile wrapper around the development server |
 | `make test` | Makefile wrapper around the test suite |
 | `make clean` | Remove generated build output and local Wrangler state |
@@ -55,7 +54,7 @@ or secrets.
 
 ## Build output
 
-`npm run build` produces two ignored directories under `web/`:
+`bun run build` produces two ignored directories under `web/`:
 
 ```text
 web/client/                     React static assets
@@ -81,7 +80,7 @@ Run the production build when changing Worker routing, assets, or Wrangler confi
 test suite and type-check before bundling:
 
 ```sh
-npm run build
+bun run build
 ```
 
 ## Repository layout

@@ -1,21 +1,21 @@
-FROM node:22-alpine AS build
+FROM oven/bun:1.3.9-alpine AS build
 
 WORKDIR /app
 
-COPY package.json package-lock.json tsconfig.redirect.json ./
+COPY package.json bun.lock tsconfig.redirect.json ./
 COPY railway-redirect/server.ts ./railway-redirect/server.ts
-RUN npm ci && npm run build:redirect
+RUN bun install --frozen-lockfile && bun run build:redirect
 
-FROM node:22-alpine
+FROM oven/bun:1.3.9-alpine
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=build --chown=node:node /app/dist/railway-redirect/server.js ./server.js
+COPY --from=build --chown=bun:bun /app/dist/railway-redirect/server.js ./server.js
 
-USER node
+USER bun
 
 EXPOSE 8080
 
-CMD ["node", "server.js"]
+CMD ["bun", "server.js"]

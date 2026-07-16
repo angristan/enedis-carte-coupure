@@ -14,15 +14,15 @@ certificate from the route declared in `wrangler.jsonc`.
 Authenticate Wrangler once:
 
 ```sh
-npx wrangler login
+bunx wrangler login
 ```
 
 Run tests, build, and deploy:
 
 ```sh
-npm test
-npm run build
-npm run deploy
+bun run test
+bun run build
+bun run deploy
 ```
 
 The deploy script rebuilds the project and publishes the generated configuration at
@@ -71,13 +71,13 @@ window, its Redis service can be removed after that window closes.
 List recent Worker deployments:
 
 ```sh
-npx wrangler deployments list --name enedis-carte-coupure
+bunx wrangler deployments list --name enedis-carte-coupure
 ```
 
 Roll back to a known-good Worker version:
 
 ```sh
-npx wrangler rollback <version-id> --name enedis-carte-coupure
+bunx wrangler rollback <version-id> --name enedis-carte-coupure
 ```
 
 Confirm the primary domain and both API endpoints after the rollback. The Custom Domain is attached to the Worker,

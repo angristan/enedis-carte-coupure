@@ -5,22 +5,22 @@ PORT ?= 5173
 run: dev
 
 dev:
-	npm run dev -- --host 127.0.0.1 --port $(PORT)
+	bun run dev -- --host 127.0.0.1 --port $(PORT)
 
 build:
-	npm run build
+	bun run build
 
 preview:
-	npm run preview -- --host 127.0.0.1 --port $(PORT)
+	bun run preview -- --host 127.0.0.1 --port $(PORT)
 
 deploy:
-	npm run deploy
+	bun run deploy
 
 test:
-	npm run test
+	bun run test
 
 typecheck:
-	npm run typecheck
+	bun run typecheck
 
 clean:
 	rm -rf web .wrangler/state
