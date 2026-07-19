@@ -105,44 +105,35 @@ occasional repeated upstream work after a cold deployment is expected.
 
 ## Tracing
 
-Workers observability is enabled in `wrangler.jsonc`. The application creates spans for:
+Workers observability is enabled in `wrangler.jsonc`. Provider and cache adapters bridge their named Effect
+operations into native Cloudflare spans:
 
-- `request`
 - `cache.get` and `cache.put`
-- `communes.for_bounds` and `communes.lookup_point`
-- `outages.fetch_visible_commune_facts`
+- `communes.lookup`
 - `enedis.fetch`
-- `outages.normalize`
-- `outages.geocode_streets`
-- `outages.attach_geometry`
 - `geocode.lookup`
-- `streetgeom.requests` and `streetgeom.lookup`
-- `outages.refresh_stale` and `outages.refresh_stale_commune`
+- `streetgeom.lookup`
 
-Useful attributes include:
+Useful bounded attributes include provider names, commune coordinates, street-name batch sizes, cache keys, and
+`http.response.status_code`. Cloudflare also creates platform spans for outgoing `fetch` and KV operations.
 
-- `communes.point_cache_hits`
-- `communes.point_contour_hits`
-- `communes.point_upstream_fetches`
-- `communes.responses`, `communes.warnings`, and `communes.cache_*`
-- `cache.hit` and `cache.expiration_ttl`
-- `streetgeom.missing` and `streetgeom.results`
-- upstream `http.response.status_code`
-
-Cloudflare also adds spans for outgoing `fetch` calls and KV operations.
+Higher-level workflows remain named with `Effect.fn`, which improves Effect traces and failure stacks without
+creating an extra native span for every pure transformation. Unexpected causes are logged once at the Worker
+boundary; public decode errors do not expose Schema diagnostics.
 
 ## Troubleshooting
 
 ### A cold or broad viewport is slow
 
-Inspect `outages.fetch_visible_commune_facts` and its child `enedis.fetch` spans. A broad uncached view can wait on
-several Enedis commune requests even though concurrency is capped at six. Compare point-cache, contour-hit, and
-upstream-fetch attributes before changing concurrency.
+Inspect the `enedis.fetch`, `geocode.lookup`, and `streetgeom.lookup` spans. A broad uncached view can wait on
+several commune requests even though concurrency is capped. Check the `X-App-Cache-Commune-*` response headers
+before changing concurrency.
 
 ### Nearby viewports repeat commune lookups
 
-Check `communes.point_cache_hits`, `communes.point_contour_hits`, and `communes.point_upstream_fetches`. Repeated
-upstream fetches can indicate a cold `communes:points` index or a viewport outside the cached contours.
+Check whether the bounds snap to the same `communes:*` cache key. The browser can reuse commune contours within
+its current response, while the Worker reuses snapped viewport entries. KV eventual consistency can still cause
+brief repeated work after a cold write.
 
 ### Street lines are missing
 

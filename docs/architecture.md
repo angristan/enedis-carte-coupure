@@ -1,152 +1,126 @@
 # Architecture and data flow
 
-The application is a React single-page app and a Cloudflare Worker deployed together. The Worker is both the
-static asset origin and the API used by the browser.
+The application is a React single-page app and a Cloudflare Worker deployed together. The Worker serves the built
+assets and the API used by the browser.
 
 ## System overview
 
 ```text
 Browser
-  |
-  +-- application routes ------------------> Workers Static Assets
-  |
-  `-- /api/health, /api/outages ----------> Worker router
-                                                |
-                                                +-- visible-commune resolver
-                                                |     +-- geo.api.gouv.fr
-                                                |     `-- KV point/contour index
-                                                |
-                                                +-- Enedis client
-                                                |     `-- one request per commune
-                                                |
-                                                +-- outage normalizer
-                                                |     +-- deduplicate incidents
-                                                |     +-- normalize street labels
-                                                |     `-- merge statistics/polygons
-                                                |
-                                                +-- geocoder
-                                                |     +-- GeoPF
-                                                |     `-- api-adresse fallback
-                                                |
-                                                +-- street geometry provider
-                                                |     +-- bounded Overpass query
-                                                |     `-- same-name locality filter
-                                                |
-                                                `-- Workers KV
-                                                      +-- outage responses
-                                                      +-- per-commune facts
-                                                      +-- commune contours
-                                                      +-- geocoding index
-                                                      `-- street geometry indexes
+  |  React + MapLibre
+  |  Effect API client + shared Schema contract
+  v
+Cloudflare Worker
+  |  thin Request/Response boundary
+  v
+OutageService
+  +-- CommuneDirectory ------> geo.api.gouv.fr
+  +-- Enedis ----------------> enedis.fr
+  +-- Normalizer
+  |     +-- Geocoder --------> GeoPF / api-adresse
+  |     `-- StreetGeometry --> Overpass
+  `-- KVStore ---------------> Workers KV
 ```
 
-Non-API routes are served from the Vite build through Workers Static Assets. API routes run through
-`worker/index.ts` first.
+The public data contract lives in `shared/api.ts`. The Worker encodes responses with that contract and the browser
+decodes every successful API response with the same Schema before it reaches React state.
+
+## Effect runtime
+
+`worker/index.ts` is the runtime boundary. It creates the request layer graph, runs the request program once with
+`Effect.runPromise`, and maps typed failures to HTTP responses.
+
+The layer graph contains:
+
+- `WorkerConfig` for decoded duration and cache settings;
+- `RequestContext` for the native Cloudflare trace context;
+- `BackgroundTasks` for work owned by `ExecutionContext.waitUntil()`;
+- `RawHttp` for abortable upstream requests, status classification, and Schema decoding;
+- `KVStore` for prefixed, Schema-decoded KV values;
+- provider services for communes, Enedis, geocoding, and street geometry;
+- `Normalizer` for enrichment and the pure outage transformations;
+- `OutageService` for response caching and request orchestration.
+
+Reusable operations use `Effect.fn`; sequential workflows use `Effect.gen`. Expected failures are
+`Schema.TaggedErrorClass` values. Cache failures are best-effort where the API can truthfully continue, provider
+failures stay typed, and only the outer boundary handles defects as `500` responses.
+
+Raw `fetch` remains the Cloudflare transport. `RawHttp` wraps it in `Effect.tryPromise`, forwards Effect's
+`AbortSignal`, checks the HTTP status, parses JSON as `unknown`, and decodes the result before returning it.
 
 ## Viewport request flow
 
-The browser sends the current map bounds to `/api/outages`. A viewport request follows these steps:
+The browser sends the visible map bounds to `/api/outages`.
 
-1. Validate the bounds and reject a viewport that is too large.
-2. Sample nine points across the viewport, including its center and edges.
-3. Resolve each point to a commune with `geo.api.gouv.fr`.
-4. Reuse exact point matches or cached commune contours whenever possible.
-5. Deduplicate the communes and stop if the viewport crosses more than 30 of them.
-6. Fetch Enedis outage data for the visible communes, with at most six requests in flight.
-7. Normalize each commune into incidents and affected streets.
-8. Geocode street labels with at most four requests in flight.
-9. Query Overpass for the missing street names inside a padded commune boundary.
-10. Cache the normalized commune result and compose the viewport response.
+1. The Worker validates the request method and viewport.
+2. `CommuneDirectory` checks the snapped viewport cache.
+3. On a miss, it samples nine points and resolves them through `geo.api.gouv.fr`, with at most eight requests in
+   flight.
+4. The Worker deduplicates communes and rejects viewports crossing more than 30 communes.
+5. `OutageService` loads each commune's normalized outage fact, with at most six communes in flight.
+6. `Enedis` fetches and Schema-decodes the public outage payload.
+7. `Normalizer` deduplicates incidents and streets, then geocodes streets with at most four lookups in flight.
+8. `StreetGeometryProvider` loads missing OSM street geometry from a bounded Overpass query.
+9. The Worker caches each commune fact and composes the viewport response.
+10. The response is encoded through `OutageResponseSchema` before it leaves the Worker.
 
-A failed commune request becomes a warning rather than discarding successful results from the other communes. The
-API returns an error only when all visible commune requests fail.
-
-## Commune discovery and spatial reuse
-
-Commune lookup is deliberately spatial rather than tied only to a viewport cache key.
-
-The Worker stores:
-
-- snapped viewport results under `communes:*`;
-- exact sample-point results and commune contours under `communes:points`;
-- a short in-isolate point cache for repeated lookups handled by the same Worker instance.
-
-When an exact point is absent, the resolver checks whether it falls inside any cached commune contour. A contour
-hit avoids an upstream lookup and is written back as an exact point entry. This makes shifted viewports cheap after
-the surrounding communes have been learned.
-
-The browser applies the same idea. Each response contains commune contours, and the frontend reuses the current
-data when all sample points from the new map bounds remain inside those contours. It also avoids launching a new
-request when an active request already covers the new bounds.
+A failed commune becomes a warning when another commune succeeded. The request returns `502` only when every
+required commune failed.
 
 ## Outage normalization
 
-Enedis data is organized around incidents and address labels. The normalizer turns it into a stable map-oriented
-response:
+The pure normalization path:
 
-- street abbreviations such as `R.`, `BD`, and `AV` are expanded;
-- leading street numbers and accents are normalized for matching;
-- duplicate incidents, addresses, and streets are merged;
-- outage start and estimated restoration times are combined;
-- affected-household counts and incident counters are aggregated;
-- polygons from multiple communes are combined into one feature collection;
-- raw commune responses are composed into one viewport response.
+- expands common street abbreviations;
+- removes leading address numbers where they are not part of the street name;
+- deduplicates incidents, addresses, and streets;
+- combines outage dates and affected-household counts;
+- aggregates incident counters;
+- retains display labels even when geocoding or geometry lookup misses.
 
-The original human-readable labels remain available for the UI even when a street cannot be geocoded or matched
-to OpenStreetMap geometry.
+Provider-backed enrichment is separate from those transformations, so the pure behavior can be tested without a
+runtime layer.
+
+## Commune and browser reuse
+
+The Worker stores snapped viewport results under `communes:*`. A shifted viewport that snaps to the same bounds
+reuses that entry.
+
+Responses also include commune contours. The browser samples the new map bounds against those contours and keeps
+the current response when it remains covered. It also avoids starting a second request when the active request
+already contains the new bounds.
 
 ## Geocoding and street geometry
 
-The geocoder tries the GeoPF endpoint first and falls back to `api-adresse.data.gouv.fr`. Successful lookups and
-misses are cached; transient errors are not.
+The geocoder tries GeoPF first and `api-adresse.data.gouv.fr` second. Successful results and misses are stored under
+per-query hashed keys; transient failures are not cached.
 
-Street geometry is loaded from a primary and fallback Overpass endpoint. Queries are:
-
-- limited to padded and snapped geographic bounds;
-- restricted to the street names missing from the current index;
-- batched to keep regular expressions manageable;
-- tolerant of accents and common punctuation differences.
-
-OpenStreetMap can contain the same road name in several disconnected places. After a street is geocoded, the
-geometry provider groups connected line components and keeps the components closest to the geocoded point. This
-reduces false matches without truncating a road that is split across several OSM ways.
+Street geometry is loaded from a primary and fallback Overpass endpoint. Queries are bounded, padded, snapped,
+and batched by street name. Same-name OSM geometry is split into connected components and filtered around the
+geocoded point to avoid selecting a distant road with the same name.
 
 ## Cache model
 
-| Layer | Key or strategy | Lifetime |
+| Data | Key or strategy | Lifetime |
 | --- | --- | --- |
-| Single-query API response | Hashed `outages:*` key with SWR | 15 minutes fresh; retained for 24 hours |
-| Per-commune viewport facts | Hashed `commune-outages:*` key | 15 minutes fresh; retained for 24 hours |
-| Raw Enedis single-query index | Shared `enedis:index`, capped at 200 entries | 5 minutes |
+| Single-query API response | Hashed `outages:*` entry with stale-while-revalidate | 15 minutes fresh; retained 24 hours |
+| Per-commune outage fact | Hashed `commune-outages:*` entry with stale-while-revalidate | 15 minutes fresh; retained 24 hours |
 | Snapped commune viewport | `communes:*` | 7 days |
-| Commune point and contour index | `communes:points`, capped at 2,500 entries | 7 days |
-| Geocoding index | `geocode:index` | Persistent KV entry |
+| Geocode result | Hashed `geocode:*` entry | 30 days |
 | Street geometry index | `streetgeom:streets:*` | 24 hours |
 
-Single-commune API responses can be returned stale while `ctx.waitUntil()` refreshes them in the background.
-Viewport responses are rebuilt from fresh per-commune facts instead of storing a large response for every possible
-map rectangle.
+Stale response and commune entries schedule refreshes through `ctx.waitUntil()`. KV is a cache, not an authoritative
+store: reads may be eventually consistent and cache read/write failures do not fail otherwise valid upstream work.
 
-Empty commune results are stored in a compact form because communes without a current outage are the common case.
+## Frontend structure
 
-## Runtime limits and concurrency
+The frontend keeps React behavior idiomatic:
 
-The Worker currently enforces:
+- `frontend/src/App.tsx` owns request and selection state;
+- `frontend/src/api/client.ts` owns Effect cancellation, typed API errors, and Schema decoding;
+- `frontend/src/map/MapView.tsx` owns MapLibre integration;
+- `frontend/src/map/geometry.ts` and `viewport.ts` contain pure spatial helpers;
+- `frontend/src/components/` contains the side panel and statistics;
+- `frontend/src/domain/streets.ts` contains filtering and display logic.
 
-- a maximum viewport area of 0.35 square degrees;
-- a maximum latitude or longitude span of 1 degree;
-- a maximum of 30 resolved communes;
-- eight concurrent commune point lookups;
-- six concurrent Enedis commune requests;
-- four concurrent street geocoding requests.
-
-These limits protect the upstream services and keep a single map interaction within a predictable amount of work.
-
-## Data semantics
-
-- **HTA** is medium-voltage distribution. An HTA incident can cover a relatively large area.
-- **BT** is low-voltage distribution and is usually more local.
-- Some Enedis address rows are technical labels rather than real streets. They remain in the list even when no
-  reliable geometry can be found.
-- Enedis operates at commune scope. A viewport crossing Paris can therefore return every current Paris outage, not
-  only streets strictly contained inside the visible rectangle.
+Effect is used at the asynchronous and validation boundary; it does not replace React state or MapLibre events.

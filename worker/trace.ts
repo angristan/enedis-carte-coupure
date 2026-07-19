@@ -1,45 +1,43 @@
 export interface TraceSpan {
-  isTraced?: boolean;
+  readonly isTraced?: boolean;
   setAttribute(key: string, value: string | number | boolean): void;
 }
 
-interface TraceContext {
-  tracing?: {
-    enterSpan<T>(name: string, callback: (span: TraceSpan) => Promise<T>): Promise<T>;
+export interface NativeTraceContext {
+  readonly tracing?: {
+    enterSpan<T>(
+      name: string,
+      callback: (span: TraceSpan) => Promise<T>,
+    ): Promise<T>;
   };
 }
 
-type Attributes = Record<string, unknown>;
+export type TraceAttributes = Readonly<
+  Record<string, string | number | boolean | null | undefined>
+>;
 
-export function enterSpan<T>(
-  ctx: TraceContext | null | undefined,
+export function tracedPromise<T>(
+  context: NativeTraceContext | undefined,
   name: string,
-  attributes: Attributes,
+  attributes: TraceAttributes,
   callback: (span: TraceSpan) => Promise<T>,
 ): Promise<T> {
-  const tracing = ctx?.tracing;
-  const run = async (span?: TraceSpan) => {
+  const run = (span: TraceSpan): Promise<T> => {
     setAttributes(span, attributes);
-    return callback(span || noopSpan);
+    return callback(span);
   };
-
-  if (tracing?.enterSpan) {
-    return tracing.enterSpan(name, run);
-  }
-  return run(noopSpan);
+  return context?.tracing?.enterSpan
+    ? context.tracing.enterSpan(name, run)
+    : run(noopSpan);
 }
 
-export function setAttributes(span: TraceSpan | null | undefined, attributes: Attributes = {}): void {
-  if (!span?.setAttribute) return;
+export function setAttributes(
+  span: TraceSpan,
+  attributes: TraceAttributes,
+): void {
   for (const [key, value] of Object.entries(attributes)) {
-    if (value === undefined || value === null) continue;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      span.setAttribute(key, value);
-    }
+    if (value !== undefined && value !== null) span.setAttribute(key, value);
   }
 }
 
-const noopSpan: TraceSpan = {
-  isTraced: false,
-  setAttribute() {},
-};
+const noopSpan: TraceSpan = { isTraced: false, setAttribute() {} };

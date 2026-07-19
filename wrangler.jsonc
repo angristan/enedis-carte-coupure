@@ -23,7 +23,6 @@
   "vars": {
     "CACHE_PREFIX": "enedis-carte-coupure",
     "COMMUNES_CACHE_TTL": "7d",
-    "ENEDIS_CACHE_TTL": "5m",
     "OUTAGE_CACHE_TTL": "15m",
     "OUTAGE_CACHE_STALE_TTL": "24h"
   },

@@ -25,7 +25,7 @@ under `.wrangler/state`.
 | Command | Purpose |
 | --- | --- |
 | `bun run dev` | Start the local Worker and Vite development server |
-| `bun run test` | Run Worker and Railway redirect tests with Vitest |
+| `bun run test` | Run Worker, frontend, and Railway redirect tests with Vitest |
 | `bun run typecheck` | Type-check the frontend, Worker, tests, and tooling |
 | `bun run build` | Test, type-check, and build the Worker bundle and static assets |
 | `bun run build:redirect` | Compile the Railway redirect service to JavaScript |
@@ -42,8 +42,7 @@ The committed defaults live in `wrangler.jsonc`:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CACHE_PREFIX` | `enedis-carte-coupure` | Prefix applied to every KV key |
-| `COMMUNES_CACHE_TTL` | `7d` | Lifetime of commune viewport and point indexes |
-| `ENEDIS_CACHE_TTL` | `5m` | Fresh lifetime of raw single-query Enedis data |
+| `COMMUNES_CACHE_TTL` | `7d` | Lifetime of snapped commune viewport entries |
 | `OUTAGE_CACHE_TTL` | `15m` | Fresh lifetime of normalized outage data |
 | `OUTAGE_CACHE_STALE_TTL` | `24h` | Retention window for stale outage data |
 
@@ -66,14 +65,14 @@ asset directory during the build.
 
 ## Tests
 
-Vitest runs in the Node environment and currently covers:
+Vitest and `@effect/vitest` run in the Node environment and cover:
 
-- KV JSON serialization, key prefixing, and expiration;
-- deterministic outage cache keys and duration parsing;
-- Enedis cache reuse and explicit cache bypass;
-- viewport parsing and snapped cache bounds;
-- commune contour reuse across shifted viewports;
-- street-label normalization;
+- typed KV decoding and malformed cache entries;
+- upstream JSON/status classification;
+- viewport parsing, snapping, containment, and commune geometry;
+- street-label normalization and line merging;
+- public API response decoding and HTTP error mapping;
+- Worker transport error responses;
 - Railway redirect path/query preservation and open-redirect protection.
 
 Run the production build when changing Worker routing, assets, or Wrangler configuration. It runs the complete
@@ -86,8 +85,9 @@ bun run build
 ## Repository layout
 
 ```text
-frontend/               React and MapLibre GL application
-worker/                 Worker API and data pipeline
+frontend/               React, MapLibre GL, and Effect API client
+shared/                 Effect Schema public API contract
+worker/                 Effect services, Worker API, and data pipeline
 railway-redirect/       Legacy Railway URL redirect service
 docs/                   Architecture, API, development, and operations guides
 wrangler.jsonc          Worker bindings, variables, routes, and observability
@@ -107,13 +107,13 @@ Cloudflare Workers.
 
 The main modules are intentionally separated by responsibility:
 
-- `worker/index.ts` owns routing, runtime configuration, response caching, and viewport composition.
-- `worker/communes.ts` resolves map bounds to communes and maintains the point/contour index.
-- `worker/enedis.ts` builds and executes Enedis queries.
-- `worker/outages.ts` normalizes and merges incidents and streets.
-- `worker/geocode.ts` handles GeoPF and fallback geocoding.
-- `worker/streetgeom.ts` builds bounded Overpass queries and filters geometry.
-- `worker/cache.ts` provides the traced KV JSON abstraction.
-- `worker/trace.ts` wraps Cloudflare application spans.
+- `shared/api.ts` defines the public response schemas consumed by both runtimes.
+- `worker/index.ts` is the thin routing, layer assembly, and `Effect.runPromise` boundary.
+- `worker/platform.ts` provides configuration, HTTP, KV, request context, and background-task services.
+- `worker/service.ts` owns outage caching and viewport orchestration.
+- `worker/communes.ts`, `enedis.ts`, `geocode.ts`, and `streetgeom.ts` are provider services.
+- `worker/outages.ts` separates pure normalization from provider-backed enrichment.
+- `worker/errors.ts` defines the typed failure contract.
+- `frontend/src/api/client.ts` performs abortable requests and validates responses before React sees them.
 
 See [Architecture and data flow](architecture.md) before changing cache keys or the commune composition model.

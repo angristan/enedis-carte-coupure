@@ -1,69 +1,42 @@
-export async function sha256Hex(value: string) {
+import { Effect, Schema } from "effect";
+
+export class CryptoError
+  extends Schema.TaggedErrorClass<CryptoError>()("CryptoError", {
+    cause: Schema.Defect(),
+  }) {}
+
+export const sha256Hex = Effect.fn("sha256Hex")(function* (value: string) {
   const data = new TextEncoder().encode(value);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const hash = yield* Effect.tryPromise({
+    try: () => crypto.subtle.digest("SHA-256", data),
+    catch: (cause) => CryptoError.make({ cause }),
+  });
+  return Array.from(
+    new Uint8Array(hash),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+});
+
+export function uniqueSorted(values: ReadonlyArray<string>): Array<string> {
+  return Array.from(new Set(values.filter((value) => value.length > 0))).sort((
+    left,
+    right,
+  ) => left.localeCompare(right));
 }
 
-export function parseDuration(value: string | undefined, fallbackSeconds: number) {
-  if (!value) return fallbackSeconds;
-  const match = String(value).trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
-  if (!match) return fallbackSeconds;
-
-  const amount = Number(match[1]);
-  const unit = match[2] || "s";
-  if (!Number.isFinite(amount) || amount < 0) return fallbackSeconds;
-
-  switch (unit) {
-    case "ms":
-      return amount / 1000;
-    case "s":
-      return amount;
-    case "m":
-      return amount * 60;
-    case "h":
-      return amount * 3600;
-    case "d":
-      return amount * 86400;
-    default:
-      return fallbackSeconds;
-  }
-}
-
-export async function mapLimit<T, R>(items: T[], limit: number, callback: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) return;
-      results[index] = await callback(items[index], index);
-    }
-  }
-
-  const workers = [];
-  for (let index = 0; index < Math.min(limit, items.length); index += 1) {
-    workers.push(worker());
-  }
-  await Promise.all(workers);
-  return results;
-}
-
-export function uniqueSorted(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
-}
-
-export function addUnique(values: string[], value: string): void {
-  if (!value || values.includes(value)) return;
+export function addUnique(values: Array<string>, value: string): void {
+  if (value.length === 0 || values.includes(value)) return;
   values.push(value);
 }
 
 export function stripAccents(value: unknown): string {
-  return String(value).replace(/[ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïñòóôõöùúûüýÿŒœÆæ]/g, (char) => ACCENTS[char] || char);
+  return String(value).replace(
+    /[ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïñòóôõöùúûüýÿŒœÆæ]/g,
+    (char) => ACCENTS[char] ?? char,
+  );
 }
 
-const ACCENTS: Record<string, string> = {
+const ACCENTS: Readonly<Record<string, string>> = {
   À: "A",
   Á: "A",
   Â: "A",

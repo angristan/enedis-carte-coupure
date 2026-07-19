@@ -16,19 +16,21 @@ streets, retrieves their OpenStreetMap geometry, and renders the complete result
 - Keeps the map, street list, filters, and search synchronized.
 - Reuses commune contours when the map moves within an area that is already loaded.
 - Runs the API and React application together on Cloudflare Workers.
+- Uses Effect v4 services, layers, typed errors, cancellation, and bounded concurrency.
+- Validates upstream, cache, and public API data with a shared Effect Schema contract.
 - Uses Workers KV for outage, commune, geocoding, and street-geometry caches.
-- Emits application spans around cache work, normalization, and upstream requests.
+- Emits native Cloudflare spans around cache and upstream boundaries.
 
 ## How it works
 
 ```text
-Browser
-  -> Cloudflare Worker
+Browser (React + Effect API decoder)
+  -> Cloudflare Worker (Effect service graph)
        -> geo.api.gouv.fr finds the visible communes
        -> Enedis provides outage data for each commune
        -> GeoPF / api-adresse geocodes affected streets
        -> Overpass provides OpenStreetMap street geometry
-       -> Workers KV caches reusable results and indexes
+       -> Workers KV caches Schema-validated results and indexes
 ```
 
 The Worker serves `/api/health`, `/api/outages`, and the built React application from one deployment. See

@@ -1,118 +1,74 @@
-import { describe, expect, it, vi } from "vitest";
-import { KVJSONStore, MemoryKVNamespace } from "./cache.js";
-import { DEFAULT_QUERY, EnedisClient } from "./enedis.js";
-import { testExports } from "./index.js";
-import { parseDuration } from "./util.js";
+import { assert, describe, it, layer, vi } from "@effect/vitest";
+import { Effect, Layer, Schema } from "effect";
+import { MemoryKVLayer } from "./cache.js";
+import {
+  KVStore,
+  parseDuration,
+  RawHttp,
+  RawHttpLive,
+  RequestContext,
+} from "./platform.js";
+import { sha256Hex } from "./util.js";
 
-describe("KV cache helpers", () => {
-  it("round-trips JSON through a prefixed KV namespace", async () => {
-    const store = new KVJSONStore(new MemoryKVNamespace(), "enedis-test");
-    await store.set("outages:abc", { ok: true }, { expirationTtl: 60 });
-    await expect(store.get("outages:abc")).resolves.toEqual({ found: true, value: { ok: true } });
+const RequestTest = Layer.succeed(RequestContext)({ trace: {} });
+const HttpTest = RawHttpLive.pipe(Layer.provide(RequestTest));
+
+describe("worker boundaries", () => {
+  layer(MemoryKVLayer)((it) => {
+    it.effect("round-trips and decodes typed cache values", () =>
+      Effect.gen(function* () {
+        const cache = yield* KVStore;
+        yield* cache.set("sample", { ok: true }, 60);
+        const value = yield* cache.get(
+          "sample",
+          Schema.Struct({ ok: Schema.Boolean }),
+        );
+        assert.deepEqual(value, { ok: true });
+      }));
+
+    it.effect("rejects malformed cached values", () =>
+      Effect.gen(function* () {
+        const cache = yield* KVStore;
+        yield* cache.set("sample", { ok: "not-boolean" });
+        const exit = yield* Effect.exit(
+          cache.get("sample", Schema.Struct({ ok: Schema.Boolean })),
+        );
+        assert.strictEqual(exit._tag, "Failure");
+      }));
   });
 
-  it("uses deterministic outage cache keys", async () => {
-    const query = { insee: "75056", city: "Paris" };
-    await expect(testExports.outageCacheKey(query, false, true)).resolves.toBe(
-      await testExports.outageCacheKey(query, false, true),
-    );
-    await expect(testExports.outageCacheKey(query, true, true)).resolves.not.toBe(
-      await testExports.outageCacheKey(query, false, true),
-    );
+  layer(HttpTest)((it) => {
+    it.effect("classifies malformed upstream JSON", () =>
+      Effect.gen(function* () {
+        const restore = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+          new Response("not-json", { status: 200 }),
+        );
+        const http = yield* RawHttp;
+        const exit = yield* Effect.exit(
+          http.json({
+            provider: "test",
+            operation: "test.fetch",
+            url: "https://example.test",
+          }, Schema.Struct({ ok: Schema.Boolean })),
+        );
+        restore.mockRestore();
+        assert.strictEqual(exit._tag, "Failure");
+        if (exit._tag === "Failure") {
+          assert.include(String(exit.cause), "UpstreamDecodeError");
+        }
+      }));
   });
 
-  it("parses day durations for longer-lived KV indexes", () => {
-    expect(parseDuration("7d", 1)).toBe(604800);
-  });
+  it.effect("creates deterministic cache hashes", () =>
+    Effect.gen(function* () {
+      const first = yield* sha256Hex("payload");
+      const second = yield* sha256Hex("payload");
+      assert.strictEqual(first, second);
+      assert.strictEqual(first.length, 64);
+    }));
 
-  it("reuses Enedis payloads from one KV index", async () => {
-    const originalFetch = globalThis.fetch;
-    let fetches = 0;
-    globalThis.fetch = async () => {
-      fetches += 1;
-      return new Response(JSON.stringify({ ok: true, fetches }), { status: 200 });
-    };
-
-    try {
-      const store = new KVJSONStore(new MemoryKVNamespace(), "enedis-test");
-      const firstClient = new EnedisClient(store, {}, 300);
-      const first = await firstClient.fetch(DEFAULT_QUERY);
-      await firstClient.save();
-
-      const secondClient = new EnedisClient(store, {}, 300);
-      const second = await secondClient.fetch(DEFAULT_QUERY);
-
-      expect(fetches).toBe(1);
-      expect(second).toEqual(first);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("can bypass the raw Enedis KV index for composed viewport requests", async () => {
-    const originalFetch = globalThis.fetch;
-    let fetches = 0;
-    globalThis.fetch = async () => {
-      fetches += 1;
-      return new Response(JSON.stringify({ ok: true, fetches }), { status: 200 });
-    };
-
-    try {
-      const store = new KVJSONStore(new MemoryKVNamespace(), "enedis-test");
-      const firstClient = new EnedisClient(store, {}, 300);
-      await firstClient.fetch(DEFAULT_QUERY, { cache: false });
-      await firstClient.save();
-
-      const secondClient = new EnedisClient(store, {}, 300);
-      await secondClient.fetch(DEFAULT_QUERY, { cache: false });
-
-      await expect(store.get("enedis:index")).resolves.toEqual({ found: false, value: null });
-      expect(fetches).toBe(2);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("serves a stale commune response while refreshing it in the background", async () => {
-    const staleResponse = { updatedAt: "2026-01-01T00:00:00.000Z", stats: { outages: 1 }, outages: [], streets: [] };
-    const cache = {
-      get: vi.fn().mockResolvedValue({
-        found: true,
-        value: {
-          version: 2,
-          freshUntil: "2026-01-01T00:15:00.000Z",
-          response: staleResponse,
-        },
-      }),
-      set: vi.fn().mockResolvedValue(undefined),
-    };
-    const backgroundTasks: Promise<unknown>[] = [];
-    const runtime = {
-      cache,
-      outageCacheTTL: 900,
-      outageStaleTTL: 86400,
-      traceCtx: { waitUntil: (task: Promise<unknown>) => backgroundTasks.push(task) },
-      enedis: { fetch: vi.fn().mockResolvedValue({}) },
-      normalizer: {
-        normalizeSet: vi.fn().mockResolvedValue({
-          updatedAt: "2026-01-02T00:00:00.000Z",
-          source: {},
-          query: {},
-          stats: { outages: 0, streets: 0 },
-          outages: [],
-          streets: [],
-        }),
-      },
-    };
-    const commune = { code: "75056", name: "Paris", postcodes: ["75001"] };
-
-    await expect(testExports.fetchCachedCommuneOutage(commune, false, null, runtime)).resolves.toEqual({
-      response: staleResponse,
-      cacheStatus: "STALE",
-    });
-    expect(backgroundTasks).toHaveLength(1);
-    await Promise.all(backgroundTasks);
-    expect(runtime.enedis.fetch).toHaveBeenCalledOnce();
-    expect(cache.set).toHaveBeenCalledOnce();
+  it("parses duration configuration without throwing", () => {
+    assert.strictEqual(parseDuration("7d", 1), 604_800);
+    assert.strictEqual(parseDuration("not-a-duration", 30), 30);
   });
 });

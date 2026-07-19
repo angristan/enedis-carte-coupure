@@ -3,9 +3,10 @@
 The public API is available at `https://enedis.stanislas.cloud`. Local development uses
 `http://127.0.0.1:5173`.
 
-All JSON responses use `Content-Type: application/json; charset=utf-8` and `Cache-Control: no-store`. Workers KV
-still caches application data internally; `no-store` prevents browsers and intermediate HTTP caches from hiding
-the application's freshness semantics.
+All JSON responses use `Content-Type: application/json; charset=utf-8` and `Cache-Control: no-store`. The response
+contract is defined once in `shared/api.ts`: the Worker encodes it and the browser decodes it with Effect Schema.
+Workers KV still caches application data internally; `no-store` prevents browsers and intermediate HTTP caches
+from hiding the application's freshness semantics.
 
 ## `GET /api/health`
 
@@ -136,8 +137,11 @@ Common statuses:
 | --- | --- |
 | `400` | Invalid, partial, or oversized viewport |
 | `405` | Method other than `GET` or `HEAD` on `/api/outages` |
-| `502` | Every required Enedis request failed |
-| `500` | Unexpected Worker error |
+| `502` | Every required commune failed, an upstream rejected the request, or an upstream payload was invalid |
+| `500` | Cache-key generation or an unexpected Worker defect failed |
+
+Typed upstream failures use `UPSTREAM_TRANSPORT_ERROR`, `UPSTREAM_STATUS_ERROR`, or `UPSTREAM_DECODE_ERROR`.
+Decode responses intentionally omit raw Schema diagnostics.
 
 When only some commune requests fail, the API returns `200` with successful results and records the failures in
 `warnings`.

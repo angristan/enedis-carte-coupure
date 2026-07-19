@@ -1,123 +1,138 @@
-import { enterSpan } from "./trace.js";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
+import type { GeocodeResult, PublicGeocode } from "./models.js";
+import { GeocodePayloadSchema } from "./models.js";
+import { KVStore, RawHttp } from "./platform.js";
 import { stripAccents } from "./util.js";
 
-export const GEOCODE_PRIMARY_ENDPOINT = "https://data.geopf.fr/geocodage/search";
-export const GEOCODE_FALLBACK_ENDPOINT = "https://api-adresse.data.gouv.fr/search/";
+export const GEOCODE_PRIMARY_ENDPOINT =
+  "https://data.geopf.fr/geocodage/search";
+export const GEOCODE_FALLBACK_ENDPOINT =
+  "https://api-adresse.data.gouv.fr/search/";
+const GEOCODE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-export class Geocoder {
-  store: any;
-  traceCtx: any;
-  memory: Map<string, any>;
-  loadedStore: boolean;
-  dirty: boolean;
+const CachedGeocodeSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  updatedAt: Schema.String,
+  result: Schema.Union([
+    Schema.Struct({
+      status: Schema.Literal("ok"),
+      query: Schema.String,
+      lng: Schema.Number,
+      lat: Schema.Number,
+      label: Schema.String,
+      score: Schema.optionalKey(Schema.Number),
+      type: Schema.String,
+      postcode: Schema.String,
+      citycode: Schema.String,
+    }),
+    Schema.Struct({ status: Schema.Literal("miss"), query: Schema.String }),
+  ]),
+});
 
-  constructor(store: any, traceCtx?: any) {
-    this.store = store;
-    this.traceCtx = traceCtx;
-    this.memory = new Map();
-    this.loadedStore = false;
-    this.dirty = false;
-  }
+export class Geocoder extends Context.Service<Geocoder, {
+  readonly street: (query: string) => Effect.Effect<GeocodeResult>;
+}>()("Geocoder") {}
 
-  async street(query) {
-    query = String(query || "").trim();
-    const key = geocodeKey(query);
-    await this.loadStore();
-    if (this.memory.has(key)) {
-      return markCached(this.memory.get(key));
-    }
+export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
+  const http = yield* RawHttp;
+  const cache = yield* KVStore;
 
-    let result;
-    try {
-      result = await this.lookup(GEOCODE_PRIMARY_ENDPOINT, query);
-      if (result.status !== "ok") {
-        result = await this.lookup(GEOCODE_FALLBACK_ENDPOINT, query);
-      }
-    } catch (error) {
-      try {
-        result = await this.lookup(GEOCODE_FALLBACK_ENDPOINT, query);
-      } catch (fallbackError) {
-        return { status: "error", query, message: fallbackError.message || error.message, cached: false };
-      }
-    }
-
-    if (result.status === "ok" || result.status === "miss") {
-      this.memory.set(key, result);
-      this.dirty = true;
-    }
-    return { ...result, cached: false };
-  }
-
-  async loadStore() {
-    if (!this.store || this.loadedStore) return;
-    this.loadedStore = true;
-    const cached = await this.store.get("geocode:index", { cacheTtl: 3600 });
-    if (!cached.found || !cached.value || typeof cached.value !== "object") return;
-    for (const [key, result] of Object.entries(cached.value) as Array<[string, any]>) {
-      if (result?.status === "error") continue;
-      this.memory.set(key, result);
-    }
-  }
-
-  async save() {
-    if (!this.store || !this.dirty) return;
-    const payload: Record<string, any> = {};
-    for (const [key, result] of this.memory) {
-      const { cached, ...publicResult } = result;
-      if (publicResult.status === "error") continue;
-      payload[key] = publicResult;
-    }
-    this.dirty = false;
-    await this.store.set("geocode:index", payload);
-  }
-
-  async lookup(endpoint, query) {
-    return enterSpan(this.traceCtx, "geocode.lookup", { "geocode.endpoint": endpoint }, async (span) => {
+  const lookup = Effect.fn("Geocoder.lookup")(
+    function* (endpoint: string, query: string) {
       const url = new URL(endpoint);
       url.searchParams.set("q", query);
       url.searchParams.set("limit", "1");
-
-      const response = await fetch(url, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "enedis-carte-coupure/1.0",
+      const decoded = yield* http.json({
+        provider: "geocoder",
+        operation: "geocode.lookup",
+        url,
+        attributes: { "geocode.endpoint": endpoint },
+        init: {
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "enedis-carte-coupure/1.0",
+          },
         },
-      });
-      span.setAttribute("http.response.status_code", response.status);
-      if (!response.ok) {
-        throw new Error(`${endpoint} returned ${response.status} ${response.statusText}`);
-      }
-
-      const decoded: any = await response.json();
+      }, GeocodePayloadSchema);
       const feature = decoded.features?.[0];
-      if (!feature?.geometry?.coordinates || feature.geometry.coordinates.length < 2) {
-        return { status: "miss", query };
+      if (feature === undefined) {
+        return { status: "miss", query } satisfies PublicGeocode;
       }
+      const properties = feature.properties;
       return {
         status: "ok",
         query,
         lng: feature.geometry.coordinates[0],
         lat: feature.geometry.coordinates[1],
-        label: feature.properties?.label || "",
-        score: feature.properties?.score,
-        type: feature.properties?.type || "",
-        postcode: feature.properties?.postcode || "",
-        citycode: feature.properties?.citycode || "",
-      };
-    });
+        label: properties?.label ?? "",
+        ...(properties?.score === undefined ? {} : { score: properties.score }),
+        type: properties?.type ?? "",
+        postcode: properties?.postcode ?? "",
+        citycode: properties?.citycode ?? "",
+      } satisfies PublicGeocode;
+    },
+  );
+
+  const street = Effect.fn("Geocoder.street")(function* (rawQuery: string) {
+    const query = rawQuery.trim();
+    const key = `geocode:${geocodeKey(query).slice(0, 400)}`;
+    const cached = yield* cache.get(key, CachedGeocodeSchema, 3600).pipe(
+      Effect.catchTag("CacheError", () => Effect.succeed(null)),
+    );
+    if (cached !== null) {
+      return { ...cached.result, cached: true } satisfies GeocodeResult;
+    }
+
+    const fallback = lookup(GEOCODE_FALLBACK_ENDPOINT, query);
+    const result = yield* lookup(GEOCODE_PRIMARY_ENDPOINT, query).pipe(
+      Effect.flatMap((primary) =>
+        primary.status === "ok" ? Effect.succeed(primary) : fallback
+      ),
+      Effect.catch(() => fallback),
+      Effect.catch((error) =>
+        Effect.succeed(
+          {
+            status: "error",
+            query,
+            message: `${error.provider} lookup failed`,
+          } satisfies PublicGeocode,
+        )
+      ),
+    );
+    if (result.status !== "error") {
+      const now = yield* Clock.currentTimeMillis;
+      yield* cache.set(key, {
+        version: 1,
+        updatedAt: new Date(now).toISOString(),
+        result,
+      }, GEOCODE_TTL_SECONDS).pipe(
+        Effect.catchTag("CacheError", () => Effect.void),
+      );
+    }
+    return { ...result, cached: false } satisfies GeocodeResult;
+  });
+  return { street };
+}));
+
+export function geocodeKey(query: string): string {
+  return stripAccents(query.trim()).toUpperCase();
+}
+
+export function publicGeocode(result: GeocodeResult): PublicGeocode {
+  if (result.status === "ok") {
+    return {
+      status: "ok",
+      query: result.query,
+      lng: result.lng,
+      lat: result.lat,
+      label: result.label,
+      ...(result.score === undefined ? {} : { score: result.score }),
+      type: result.type,
+      postcode: result.postcode,
+      citycode: result.citycode,
+    };
   }
-}
-
-export function geocodeKey(query) {
-  return stripAccents(String(query || "").trim()).toUpperCase();
-}
-
-export function publicGeocode(result) {
-  if (!result) return null;
-  const { cached, ...publicResult } = result;
-  return publicResult;
-}
-
-function markCached(result) {
-  return { ...result, cached: true };
+  return result.status === "miss"
+    ? { status: "miss", query: result.query }
+    : { status: "error", query: result.query, message: result.message };
 }

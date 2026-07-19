@@ -1,256 +1,302 @@
+import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import type { UpstreamError } from "./errors.js";
+import type { Bounds } from "./geo.js";
 import { ENEDIS_ENDPOINT } from "./enedis.js";
-import { GEOCODE_FALLBACK_ENDPOINT, GEOCODE_PRIMARY_ENDPOINT, publicGeocode } from "./geocode.js";
-import { STREET_GEOMETRY_PRIMARY_ENDPOINT, streetKey } from "./streetgeom.js";
-import { enterSpan } from "./trace.js";
-import { addUnique, mapLimit, stripAccents } from "./util.js";
+import {
+  GEOCODE_FALLBACK_ENDPOINT,
+  GEOCODE_PRIMARY_ENDPOINT,
+  Geocoder,
+  publicGeocode,
+} from "./geocode.js";
+import type {
+  Commune,
+  EnedisAddress,
+  EnedisQuery,
+  NormalizeInput,
+  Outage,
+  OutageAddress,
+  OutageResponse,
+  OutageStats,
+  PublicCommune,
+  Street,
+  StreetRequest,
+} from "./models.js";
+import {
+  STREET_GEOMETRY_PRIMARY_ENDPOINT,
+  StreetGeometryProvider,
+  streetKey,
+} from "./streetgeom.js";
+import { addUnique, stripAccents } from "./util.js";
 
 const MAX_GEOCODE_CONCURRENCY = 4;
-const GEOCODE_MISS_DELAY_MS = 120;
 
-export class Normalizer {
-  geocoder: any;
-  geometries: any;
-  traceCtx: any;
+const GeoJsonFeatureSchema = Schema.Struct({
+  type: Schema.Literal("Feature"),
+  geometry: Schema.Unknown,
+  properties: Schema.optionalKey(Schema.Unknown),
+});
+const GeoJsonFeatureCollectionSchema = Schema.Struct({
+  type: Schema.Literal("FeatureCollection"),
+  features: Schema.Array(GeoJsonFeatureSchema),
+});
+const GeoJsonGeometrySchema = Schema.Struct({
+  type: Schema.Union([
+    Schema.Literal("Polygon"),
+    Schema.Literal("MultiPolygon"),
+  ]),
+  coordinates: Schema.Unknown,
+});
+const decodePolygon = Schema.decodeUnknownOption(
+  Schema.Union([
+    GeoJsonFeatureCollectionSchema,
+    GeoJsonFeatureSchema,
+    GeoJsonGeometrySchema,
+  ]),
+);
 
-  constructor(geocoder: any, geometries: any, traceCtx?: any) {
-    this.geocoder = geocoder;
-    this.geometries = geometries;
-    this.traceCtx = traceCtx;
-  }
+type GeoJsonFeature = Schema.Schema.Type<typeof GeoJsonFeatureSchema>;
+interface MutableOutage {
+  id: string;
+  status: string;
+  type: string;
+  etatElectrique: number;
+  codeInsee: string;
+  dateCoupure: string;
+  dateRealimentation: string;
+  nbFoyersCoupes: number;
+  addresses: Array<OutageAddress>;
+}
+interface MutableStreet {
+  key: string;
+  label: string;
+  normalizedName: string;
+  city: string;
+  postcode: string;
+  localisations: Array<string>;
+  outageIds: Array<string>;
+  outageTypes: Array<string>;
+  firstSeenAt: string;
+  estimatedRestoreAt: string;
+  nbFoyersCoupes: number;
+  geocode?: Street["geocode"];
+  geometry?: Street["geometry"];
+}
 
-  async normalize(raw, query, shouldGeocode) {
-    return this.normalizeSet([{ raw, query }], shouldGeocode, null);
-  }
+export class Normalizer extends Context.Service<Normalizer, {
+  readonly normalize: (
+    raw: NormalizeInput["raw"],
+    query: EnedisQuery,
+    geocode: boolean,
+  ) => Effect.Effect<OutageResponse, UpstreamError>;
+  readonly normalizeSet: (
+    inputs: ReadonlyArray<NormalizeInput>,
+    options: {
+      readonly geocode: boolean;
+      readonly geometry: boolean;
+      readonly geometryBounds?: Bounds;
+    },
+  ) => Effect.Effect<OutageResponse, UpstreamError>;
+  readonly attachGeometry: (
+    response: OutageResponse,
+    bounds: Bounds,
+  ) => Effect.Effect<OutageResponse, UpstreamError>;
+}>()("Normalizer") {}
 
-  async normalizeSet(inputs, shouldGeocode, geometryBounds) {
-    const options = normalizeOptions(shouldGeocode, geometryBounds);
-    return enterSpan(this.traceCtx, "outages.normalize", { "outages.inputs": inputs.length, "outages.geocode": options.geocode }, async (span) => {
-      const streetMap = new Map();
-      const outageMap = new Map();
-      const polygons = [];
-      const queries = [];
-      let addressRows = 0;
-      let compteurIncidentHTA = 0;
-      let compteurTravauxHTA = 0;
-      let compteurBT = 0;
-      let recap = null;
-      let crises = null;
-
-      for (const input of inputs) {
-        const raw = input.raw || {};
-        const query = input.query || {};
-        queries.push(query);
-        if (raw.polygon) polygons.push(raw.polygon);
-
-        const resultMegacache = raw.resultMegacache || {};
-        compteurIncidentHTA += number(resultMegacache.compteurIncidentHTA);
-        compteurTravauxHTA += number(resultMegacache.compteurTravauxHTA);
-        compteurBT += number(resultMegacache.compteurBT);
-        if (!recap && resultMegacache.recap) recap = resultMegacache.recap;
-        if (!crises && resultMegacache.listeCrises) crises = resultMegacache.listeCrises;
-
-        for (const [outageIndex, outage] of (resultMegacache.listeCoupuresInfoReseau || []).entries()) {
-          const outageKey = outage.idCoupure || `${query.insee}:${outageIndex}`;
-          const addresses = outage.listeAdresses || [];
-          const existing = outageMap.get(outageKey);
-          if (existing) {
-            existing.dateCoupure = earliestFrenchDate(existing.dateCoupure, outage.dateCoupure);
-            existing.dateRealimentation = latestFrenchDate(existing.dateRealimentation, outage.dateRealimentation);
-            existing.nbFoyersCoupes += number(outage.nbFoyersCoupes);
-            for (const address of addresses) addUniqueAddress(existing.addresses, address);
-          } else {
-            outageMap.set(outageKey, {
-              id: outage.idCoupure || "",
-              status: outage.etatCoupure || "",
-              type: outage.incidentCoupure || "",
-              etatElectrique: number(outage.etatElectrique),
-              codeInsee: outage.codeInsee || "",
-              dateCoupure: outage.dateCoupure || "",
-              dateRealimentation: outage.dateRealimentation || "",
-              nbFoyersCoupes: number(outage.nbFoyersCoupes),
-              addresses: uniqueAddresses(addresses),
-            });
+export const NormalizerLive = Layer.effect(Normalizer)(Effect.gen(function* () {
+  const geocoder = yield* Geocoder;
+  const geometries = yield* StreetGeometryProvider;
+  const attachStreetGeometry = Effect.fn("Normalizer.attachStreetGeometry")(
+    function* (streets: ReadonlyArray<Street>, bounds?: Bounds) {
+      if (streets.length === 0) return streets;
+      const requests: Array<StreetRequest> = streets.map((street) =>
+        street.geocode?.status === "ok"
+          ? {
+            id: street.key,
+            name: street.normalizedName,
+            point: { lat: street.geocode.lat, lng: street.geocode.lng },
           }
-
-          for (const address of addresses) {
-            addressRows += 1;
-            const parsed = parseLocalisation(address.localisation, query.city);
-            const key = [parsed.normalizedKey, parsed.postcode, stripAccents(parsed.city).toUpperCase()].join("|");
-            let street = streetMap.get(key);
-            if (!street) {
-              street = {
-                key,
-                label: parsed.label,
-                normalizedName: parsed.normalizedName,
-                city: parsed.city,
-                postcode: parsed.postcode,
-                localisations: [],
-                outageIds: [],
-                outageTypes: [],
-                firstSeenAt: "",
-                estimatedRestoreAt: "",
-                nbFoyersCoupes: 0,
-              };
-              streetMap.set(key, street);
+          : { id: street.key, name: street.normalizedName }
+      );
+      const results = yield* (bounds === undefined
+        ? geometries.streetRequests(requests)
+        : geometries.streetRequestsInBounds(requests, bounds));
+      return streets.map((street) => {
+        const geometry = results[street.key] ??
+          results[streetKey(street.normalizedName)];
+        return geometry === undefined ? street : { ...street, geometry };
+      });
+    },
+  );
+  const normalizeSet = Effect.fn("Normalizer.normalizeSet")(
+    function* (
+      inputs: ReadonlyArray<NormalizeInput>,
+      options: {
+        readonly geocode: boolean;
+        readonly geometry: boolean;
+        readonly geometryBounds?: Bounds;
+      },
+    ) {
+      const now = yield* Clock.currentTimeMillis;
+      let response = normalizePure(inputs, new Date(now).toISOString());
+      if (options.geocode && response.streets.length > 0) {
+        const streets = yield* Effect.forEach(response.streets, (street) =>
+          Effect.gen(function* () {
+            const result = yield* geocoder.street(
+              [street.normalizedName, street.city, street.postcode].join(" ")
+                .trim(),
+            );
+            if (!result.cached) {
+              yield* Effect.sleep("120 millis");
             }
-
-            addUnique(street.localisations, address.localisation || "");
-            addUnique(street.outageIds, outage.idCoupure || "");
-            addUnique(street.outageTypes, outage.incidentCoupure || "Incident");
-            street.nbFoyersCoupes += number(address.nbFoyersCoupes);
-            street.firstSeenAt = earliestFrenchDate(street.firstSeenAt, outage.dateCoupure);
-            street.estimatedRestoreAt = latestFrenchDate(street.estimatedRestoreAt, outage.dateRealimentation);
-          }
-        }
-      }
-
-      const streets = [...streetMap.values()].sort((left, right) => left.label.localeCompare(right.label));
-      for (const street of streets) {
-        street.outageIds.sort((left, right) => left.localeCompare(right));
-        street.outageTypes.sort((left, right) => left.localeCompare(right));
-      }
-
-      if (options.geocode) {
-        await this.geocodeStreets(streets);
-        if (options.geometry) {
-          await this.attachStreetGeometry(streets, options.geometryBounds);
-        }
-      }
-
-      const outages = [...outageMap.values()].sort((left, right) => left.id.localeCompare(right.id));
-      const stats = {
-        outages: outages.length,
-        addressRows,
-        streets: streets.length,
-        geocodedStreets: 0,
-        geocodeMisses: 0,
-        streetGeometry: 0,
-        streetGeometryMisses: 0,
-        compteurIncidentHTA,
-        compteurTravauxHTA,
-        compteurBT,
-      };
-
-      refreshStreetStats(stats, streets);
-
-      span.setAttribute("outages.count", stats.outages);
-      span.setAttribute("outages.streets", stats.streets);
-      span.setAttribute("outages.geometries", stats.streetGeometry);
-
-      const response: any = {
-        updatedAt: new Date().toISOString(),
-        source: sourceInfo(),
-        query: queries[0] || {},
-        polygon: combinePolygons(polygons),
-        stats,
-        outages,
-        streets,
-        recap,
-        crises,
-      };
-      if (queries.length > 1) response.queries = queries;
-      return response;
-    });
-  }
-
-  async attachGeometryToResponse(response, geometryBounds) {
-    if (!response?.streets?.length) return response;
-    await this.attachStreetGeometry(response.streets, geometryBounds);
-    refreshStreetStats(response.stats, response.streets);
-    return response;
-  }
-
-  async geocodeStreets(streets: any[]) {
-    if (!this.geocoder || streets.length === 0) return;
-    await enterSpan(this.traceCtx, "outages.geocode_streets", { "outages.streets": streets.length }, async () => {
-      await mapLimit(streets, MAX_GEOCODE_CONCURRENCY, async (street) => {
-        const query = [street.normalizedName, street.city, street.postcode].join(" ").trim();
-        const result = await this.geocoder.street(query);
-        street.geocode = publicGeocode(result);
-        if (!result.cached) await sleep(GEOCODE_MISS_DELAY_MS);
-      });
-      await this.geocoder.save?.();
-    });
-  }
-
-  async attachStreetGeometry(streets: any[], geometryBounds) {
-    if (!this.geometries || streets.length === 0) return;
-    await enterSpan(this.traceCtx, "outages.attach_geometry", { "outages.streets": streets.length }, async () => {
-      const requests = streets.map((street) => {
-        const request: any = {
-          id: street.key,
-          name: street.normalizedName,
+            return { ...street, geocode: publicGeocode(result) };
+          }), { concurrency: MAX_GEOCODE_CONCURRENCY });
+        response = {
+          ...response,
+          streets,
+          stats: refreshStreetStats(response.stats, streets),
         };
-        if (street.geocode?.status === "ok") {
-          request.point = { lat: street.geocode.lat, lng: street.geocode.lng };
+        if (options.geometry) {
+          const withGeometry = yield* attachStreetGeometry(
+            streets,
+            options.geometryBounds,
+          );
+          response = {
+            ...response,
+            streets: withGeometry,
+            stats: refreshStreetStats(response.stats, withGeometry),
+          };
         }
-        return request;
-      });
-
-      const results = geometryBounds
-        ? await this.geometries.streetRequestsInBounds(requests, geometryBounds)
-        : await this.geometries.streetRequests(requests);
-
-      for (const street of streets) {
-        const result = results[street.key] || results[streetKey(street.normalizedName)];
-        if (result) street.geometry = result;
       }
-    });
-  }
-}
+      return response;
+    },
+  );
+  const attachGeometry = Effect.fn("Normalizer.attachGeometry")(
+    function* (response: OutageResponse, bounds: Bounds) {
+      const streets = yield* attachStreetGeometry(response.streets, bounds);
+      return {
+        ...response,
+        streets,
+        stats: refreshStreetStats(response.stats, streets),
+      };
+    },
+  );
+  return {
+    normalize: (raw, query, geocode) =>
+      normalizeSet([{ raw, query }], { geocode, geometry: geocode }),
+    normalizeSet,
+    attachGeometry,
+  };
+}));
 
-export function responseCommunes(items) {
-  return items.map((item) => {
-    const commune: any = {
-      code: item.code,
-      name: item.name,
-      postcodes: item.postcodes || [],
-    };
-    if (item.center?.coordinates?.length >= 2) {
-      commune.center = { lat: item.center.coordinates[1], lng: item.center.coordinates[0] };
+function normalizePure(
+  inputs: ReadonlyArray<NormalizeInput>,
+  updatedAt: string,
+): OutageResponse {
+  const streetMap = new Map<string, MutableStreet>();
+  const outageMap = new Map<string, MutableOutage>();
+  const queries: Array<EnedisQuery> = [];
+  let addressRows = 0,
+    compteurIncidentHTA = 0,
+    compteurTravauxHTA = 0,
+    compteurBT = 0;
+  const polygons: Array<unknown> = [];
+  let recap: unknown;
+  let crises: unknown;
+  for (const input of inputs) {
+    const { raw, query } = input;
+    queries.push(query);
+    if (raw.polygon !== undefined) polygons.push(raw.polygon);
+    const data = raw.resultMegacache;
+    if (data === undefined) continue;
+    compteurIncidentHTA += number(data.compteurIncidentHTA);
+    compteurTravauxHTA += number(data.compteurTravauxHTA);
+    compteurBT += number(data.compteurBT);
+    recap ??= data.recap;
+    crises ??= data.listeCrises;
+    for (
+      const [index, outage] of (data.listeCoupuresInfoReseau ?? []).entries()
+    ) {
+      const key = outage.idCoupure ?? `${query.insee}:${index}`;
+      const addresses = outage.listeAdresses ?? [];
+      const existing = outageMap.get(key);
+      if (existing === undefined) {
+        outageMap.set(key, {
+          id: outage.idCoupure ?? "",
+          status: outage.etatCoupure ?? "",
+          type: outage.incidentCoupure ?? "",
+          etatElectrique: number(outage.etatElectrique),
+          codeInsee: outage.codeInsee ?? "",
+          dateCoupure: outage.dateCoupure ?? "",
+          dateRealimentation: outage.dateRealimentation ?? "",
+          nbFoyersCoupes: number(outage.nbFoyersCoupes),
+          addresses: uniqueAddresses(addresses),
+        });
+      } else {
+        existing.dateCoupure = earliestFrenchDate(
+          existing.dateCoupure,
+          outage.dateCoupure ?? "",
+        );
+        existing.dateRealimentation = latestFrenchDate(
+          existing.dateRealimentation,
+          outage.dateRealimentation ?? "",
+        );
+        existing.nbFoyersCoupes += number(outage.nbFoyersCoupes);
+        for (const address of addresses) {
+          addUniqueAddress(existing.addresses, address);
+        }
+      }
+      for (const address of addresses) {
+        addressRows += 1;
+        const parsed = parseLocalisation(
+          address.localisation ?? "",
+          query.city,
+        );
+        const streetId = [
+          parsed.normalizedKey,
+          parsed.postcode,
+          stripAccents(parsed.city).toUpperCase(),
+        ].join("|");
+        let street = streetMap.get(streetId);
+        if (street === undefined) {
+          street = {
+            key: streetId,
+            label: parsed.label,
+            normalizedName: parsed.normalizedName,
+            city: parsed.city,
+            postcode: parsed.postcode,
+            localisations: [],
+            outageIds: [],
+            outageTypes: [],
+            firstSeenAt: "",
+            estimatedRestoreAt: "",
+            nbFoyersCoupes: 0,
+          };
+          streetMap.set(streetId, street);
+        }
+        addUnique(street.localisations, address.localisation ?? "");
+        addUnique(street.outageIds, outage.idCoupure ?? "");
+        addUnique(street.outageTypes, outage.incidentCoupure ?? "Incident");
+        street.nbFoyersCoupes += number(address.nbFoyersCoupes);
+        street.firstSeenAt = earliestFrenchDate(
+          street.firstSeenAt,
+          outage.dateCoupure ?? "",
+        );
+        street.estimatedRestoreAt = latestFrenchDate(
+          street.estimatedRestoreAt,
+          outage.dateRealimentation ?? "",
+        );
+      }
     }
-    if (item.contour) commune.contour = item.contour;
-    return commune;
-  });
-}
-
-export function mergeOutageResponses(responses) {
-  const clean = responses.filter(Boolean);
-  const streetMap = new Map();
-  const outageMap = new Map();
-  const polygons = [];
-  const queries = [];
-  let addressRows = 0;
-  let compteurIncidentHTA = 0;
-  let compteurTravauxHTA = 0;
-  let compteurBT = 0;
-  let recap = null;
-  let crises = null;
-  let updatedAt = "";
-
-  for (const response of clean) {
-    if (response.updatedAt && (!updatedAt || response.updatedAt > updatedAt)) updatedAt = response.updatedAt;
-    if (response.polygon) polygons.push(response.polygon);
-    if (response.query) queries.push(response.query);
-    for (const query of response.queries || []) {
-      if (!queries.some((existing) => existing.insee === query.insee && existing.city === query.city)) queries.push(query);
-    }
-
-    const stats = response.stats || {};
-    addressRows += number(stats.addressRows);
-    compteurIncidentHTA += number(stats.compteurIncidentHTA);
-    compteurTravauxHTA += number(stats.compteurTravauxHTA);
-    compteurBT += number(stats.compteurBT);
-    if (!recap && response.recap) recap = response.recap;
-    if (!crises && response.crises) crises = response.crises;
-
-    for (const outage of response.outages || []) mergeOutage(outageMap, outage);
-    for (const street of response.streets || []) mergeStreet(streetMap, street);
   }
-
-  const streets = [...streetMap.values()].sort((left, right) => left.label.localeCompare(right.label));
-  const outages = [...outageMap.values()].sort((left, right) => left.id.localeCompare(right.id));
-  const stats = {
+  const streets: Array<Street> = [...streetMap.values()].map((street) => ({
+    ...street,
+    outageIds: street.outageIds.sort(),
+    outageTypes: street.outageTypes.sort(),
+  })).sort((a, b) => a.label.localeCompare(b.label));
+  const outages: Array<Outage> = [...outageMap.values()].sort((a, b) =>
+    a.id.localeCompare(b.id)
+  );
+  const stats = refreshStreetStats({
     outages: outages.length,
     addressRows,
     streets: streets.length,
@@ -261,39 +307,208 @@ export function mergeOutageResponses(responses) {
     compteurIncidentHTA,
     compteurTravauxHTA,
     compteurBT,
-  };
-  refreshStreetStats(stats, streets);
-
-  const merged: any = {
-    updatedAt: updatedAt || new Date().toISOString(),
+  }, streets);
+  const query = queries[0] ??
+    {
+      insee: "",
+      type: "",
+      adresse: "",
+      CPVille: "",
+      name: "",
+      district: "",
+      city: "",
+    };
+  const polygon = combinePolygons(polygons);
+  return {
+    updatedAt,
     source: sourceInfo(),
-    query: queries[0] || {},
-    polygon: combinePolygons(polygons),
+    query,
+    ...(queries.length > 1 ? { queries } : {}),
+    ...(polygon === undefined ? {} : { polygon }),
     stats,
     outages,
     streets,
-    recap,
-    crises,
+    ...(recap === undefined ? {} : { recap }),
+    ...(crises === undefined ? {} : { crises }),
   };
-  if (queries.length > 1) merged.queries = queries;
-  return merged;
 }
 
-export function parseLocalisation(localisation, fallbackCity) {
-  const parts = String(localisation || "").split(/,(.*)/s);
-  const rawStreet = String(parts[0] || "").trim();
-  let rawCity = fallbackCity || "";
-  if (parts[1]) rawCity = String(parts[1]).trim();
+export function responseCommunes(
+  items: ReadonlyArray<Commune>,
+): Array<PublicCommune> {
+  return items.map((item) => ({
+    code: item.code,
+    name: item.name,
+    postcodes: item.postcodes,
+    ...(item.center === undefined ? {} : {
+      center: {
+        lat: item.center.coordinates[1],
+        lng: item.center.coordinates[0],
+      },
+    }),
+    ...(item.contour === undefined ? {} : { contour: item.contour }),
+  }));
+}
+export function mergeOutageResponses(
+  responses: ReadonlyArray<OutageResponse>,
+): OutageResponse {
+  if (responses.length === 0) {
+    return normalizePure([], new Date(0).toISOString());
+  }
+  const streetMap = new Map<string, MutableStreet>();
+  const outageMap = new Map<string, MutableOutage>();
+  const queries: Array<EnedisQuery> = [];
+  const warnings: Array<string> = [];
+  const polygons: Array<unknown> = [];
+  let recap: unknown;
+  let crises: unknown;
+  let addressRows = 0,
+    compteurIncidentHTA = 0,
+    compteurTravauxHTA = 0,
+    compteurBT = 0,
+    updatedAt = "";
+  for (const response of responses) {
+    if (response.updatedAt > updatedAt) updatedAt = response.updatedAt;
+    for (const query of response.queries ?? [response.query]) {
+      if (
+        !queries.some((item) =>
+          item.insee === query.insee && item.city === query.city
+        )
+      ) queries.push(query);
+    }
+    addressRows += response.stats.addressRows;
+    compteurIncidentHTA += response.stats.compteurIncidentHTA;
+    compteurTravauxHTA += response.stats.compteurTravauxHTA;
+    compteurBT += response.stats.compteurBT;
+    if (response.polygon !== undefined) polygons.push(response.polygon);
+    recap ??= response.recap;
+    crises ??= response.crises;
+    warnings.push(...(response.warnings ?? []));
+    for (const street of response.streets) mergeStreet(streetMap, street);
+    for (const outage of response.outages) mergeOutage(outageMap, outage);
+  }
+  const streets: Array<Street> = [...streetMap.values()].sort((a, b) =>
+    a.label.localeCompare(b.label)
+  );
+  const outages: Array<Outage> = [...outageMap.values()].sort((a, b) =>
+    a.id.localeCompare(b.id)
+  );
+  const query = queries[0] ?? responses[0].query;
+  const polygon = combinePolygons(polygons);
+  return {
+    updatedAt,
+    source: sourceInfo(),
+    query,
+    ...(queries.length > 1 ? { queries } : {}),
+    ...(polygon === undefined ? {} : { polygon }),
+    stats: refreshStreetStats({
+      outages: outages.length,
+      addressRows,
+      streets: streets.length,
+      geocodedStreets: 0,
+      geocodeMisses: 0,
+      streetGeometry: 0,
+      streetGeometryMisses: 0,
+      compteurIncidentHTA,
+      compteurTravauxHTA,
+      compteurBT,
+    }, streets),
+    outages,
+    streets,
+    ...(recap === undefined ? {} : { recap }),
+    ...(crises === undefined ? {} : { crises }),
+    ...(warnings.length === 0 ? {} : { warnings }),
+  };
+}
 
-  let postcode = "";
-  const cityPostcode = rawCity.match(/\((\d{5})\)/);
-  const streetPostcode = rawStreet.match(/\b(75\d{3})\b/);
-  if (cityPostcode) postcode = cityPostcode[1];
-  else if (streetPostcode) postcode = streetPostcode[1];
+function combinePolygons(
+  polygons: ReadonlyArray<unknown>,
+): unknown | undefined {
+  const decoded = polygons.flatMap((polygon) => {
+    const result = decodePolygon(polygon);
+    return Option.isSome(result) ? [result.value] : [];
+  });
+  if (decoded.length === 0) return undefined;
+  if (decoded.length === 1) return decoded[0];
 
-  let city = rawCity.replace(/\([^)]*\)/g, "").trim();
-  if (!city) city = fallbackCity || "Paris";
+  const features: Array<GeoJsonFeature> = [];
+  for (const polygon of decoded) {
+    if (polygon.type === "FeatureCollection") {
+      features.push(...polygon.features);
+    } else if (polygon.type === "Feature") {
+      features.push(polygon);
+    } else {
+      features.push({ type: "Feature", geometry: polygon, properties: {} });
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
 
+function mergeStreet(map: Map<string, MutableStreet>, street: Street): void {
+  const current = map.get(street.key);
+  if (current === undefined) {
+    map.set(street.key, {
+      ...street,
+      localisations: [...street.localisations],
+      outageIds: [...street.outageIds],
+      outageTypes: [...street.outageTypes],
+    });
+    return;
+  }
+  for (const value of street.localisations) {
+    addUnique(current.localisations, value);
+  }
+  for (const value of street.outageIds) addUnique(current.outageIds, value);
+  for (const value of street.outageTypes) addUnique(current.outageTypes, value);
+  current.nbFoyersCoupes += street.nbFoyersCoupes;
+  current.firstSeenAt = earliestFrenchDate(
+    current.firstSeenAt,
+    street.firstSeenAt,
+  );
+  current.estimatedRestoreAt = latestFrenchDate(
+    current.estimatedRestoreAt,
+    street.estimatedRestoreAt,
+  );
+  current.geocode ??= street.geocode;
+  current.geometry ??= street.geometry;
+}
+function mergeOutage(map: Map<string, MutableOutage>, outage: Outage): void {
+  const key = `${outage.codeInsee}:${outage.id}:${outage.dateCoupure}`;
+  const current = map.get(key);
+  if (current === undefined) {
+    map.set(key, { ...outage, addresses: [...outage.addresses] });
+    return;
+  }
+  current.nbFoyersCoupes += outage.nbFoyersCoupes;
+  current.dateCoupure = earliestFrenchDate(
+    current.dateCoupure,
+    outage.dateCoupure,
+  );
+  current.dateRealimentation = latestFrenchDate(
+    current.dateRealimentation,
+    outage.dateRealimentation,
+  );
+  for (const address of outage.addresses) {
+    addUniqueAddress(current.addresses, address);
+  }
+}
+export function parseLocalisation(
+  localisation: string,
+  fallbackCity: string,
+): {
+  label: string;
+  normalizedName: string;
+  normalizedKey: string;
+  city: string;
+  postcode: string;
+} {
+  const parts = localisation.split(/,(.*)/s);
+  const rawStreet = (parts[0] ?? "").trim();
+  const rawCity = (parts[1] ?? fallbackCity).trim();
+  const postcode = rawCity.match(/\((\d{5})\)/)?.[1] ??
+    rawStreet.match(/\b(75\d{3})\b/)?.[1] ?? "";
+  const city = rawCity.replace(/\([^)]*\)/g, "").trim() || fallbackCity ||
+    "Paris";
   const normalizedName = normalizeStreet(rawStreet);
   return {
     label: titleCase(normalizedName),
@@ -303,14 +518,10 @@ export function parseLocalisation(localisation, fallbackCity) {
     postcode,
   };
 }
-
-export function normalizeStreet(input) {
-  let value = stripAccents(String(input || "")).toUpperCase();
-  value = value.replaceAll("\u00a0", " ");
-  value = value.replace(/[()]/g, " ");
-  value = value.replace(/\s+/g, " ").trim();
-
-  const replacements: Array<[RegExp, string]> = [
+export function normalizeStreet(input: string): string {
+  let value = stripAccents(input).toUpperCase().replaceAll("\u00a0", " ")
+    .replace(/[()]/g, " ").replace(/\s+/g, " ").trim();
+  const replacements: ReadonlyArray<readonly [RegExp, string]> = [
     [/^\/+\s*/, ""],
     [/^ET\s+/, ""],
     [/^PARKING\s+VINCI\/ROSSINI\s+\d+\s+/, ""],
@@ -328,197 +539,133 @@ export function normalizeStreet(input) {
     [/\bSTE\b/g, "SAINTE"],
   ];
   for (const [pattern, replacement] of replacements) {
-    value = value.replace(pattern, replacement);
-    value = stripLeadingAddressNumber(value);
+    value = stripLeadingAddressNumber(value.replace(pattern, replacement));
   }
   return value.replace(/\s+/g, " ").trim();
 }
-
-function stripLeadingAddressNumber(value) {
-  const cleaned = String(value || "").trim().replace(/^\/+\s*/, "");
-  const match = cleaned.match(/^\d+(?:[.\s]\d+)*[A-Z]?\s+(.+)$/);
-  if (!match) return cleaned;
-  const rest = match[1].trim();
-  return looksLikeStreetName(rest) ? rest : cleaned;
+function stripLeadingAddressNumber(value: string): string {
+  const clean = value.trim().replace(/^\/+\s*/, "");
+  const rest = clean.match(/^\d+(?:[.\s]\d+)*[A-Z]?\s+(.+)$/)?.[1]?.trim();
+  return rest !== undefined &&
+      [
+        "RUE ",
+        "R. ",
+        "R ",
+        "BD ",
+        "BOULEVARD ",
+        "AV ",
+        "AVENUE ",
+        "PL ",
+        "PLACE ",
+        "PAS ",
+        "PASSAGE ",
+        "IMP ",
+        "IMPASSE ",
+        "SQ ",
+        "SQUARE ",
+        "VILLA ",
+        "CITE ",
+        "EGLISE ",
+      ].some((prefix) => rest.startsWith(prefix))
+    ? rest
+    : clean;
 }
-
-function looksLikeStreetName(value) {
-  return [
-    "RUE ",
-    "R. ",
-    "R ",
-    "BD ",
-    "BLD ",
-    "BOULEVARD ",
-    "AV ",
-    "AVE ",
-    "AVENUE ",
-    "PL ",
-    "PLACE ",
-    "PAS ",
-    "PASSAGE ",
-    "IMP ",
-    "IMPASSE ",
-    "SQ ",
-    "SQUARE ",
-    "VILLA ",
-    "CITE ",
-    "EGLISE ",
-  ].some((prefix) => value.startsWith(prefix));
+function titleCase(value: string): string {
+  const small = new Set([
+    "a",
+    "au",
+    "aux",
+    "d",
+    "de",
+    "des",
+    "du",
+    "et",
+    "l",
+    "la",
+    "le",
+    "les",
+  ]);
+  return value.toLowerCase().split(/\s+/).filter(Boolean).map((word, index) =>
+    index > 0 && small.has(word)
+      ? word
+      : word.charAt(0).toUpperCase() + word.slice(1)
+  ).join(" ");
 }
-
-function titleCase(value) {
-  const smallWords = new Set(["a", "au", "aux", "d", "de", "des", "du", "et", "l", "la", "le", "les"]);
-  return String(value || "")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word, index) => (index > 0 && smallWords.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
-    .join(" ");
+function parseFrenchDate(value: string): number {
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/);
+  return match === null ? 0 : new Date(
+    Number(match[3]),
+    Number(match[2]) - 1,
+    Number(match[1]),
+    Number(match[4]),
+    Number(match[5]),
+  ).getTime();
 }
-
-function earliestFrenchDate(current, candidate) {
-  if (!candidate) return current || "";
-  if (!current || parseFrenchDate(candidate) < parseFrenchDate(current)) return candidate;
-  return current;
+const earliestFrenchDate = (current: string, candidate: string): string =>
+  candidate.length > 0 &&
+    (current.length === 0 ||
+      parseFrenchDate(candidate) < parseFrenchDate(current))
+    ? candidate
+    : current;
+const latestFrenchDate = (current: string, candidate: string): string =>
+  candidate.length > 0 &&
+    (current.length === 0 ||
+      parseFrenchDate(candidate) > parseFrenchDate(current))
+    ? candidate
+    : current;
+function uniqueAddresses(
+  addresses: ReadonlyArray<EnedisAddress>,
+): Array<OutageAddress> {
+  const output: Array<OutageAddress> = [];
+  for (const address of addresses) addUniqueAddress(output, address);
+  return output;
 }
-
-function latestFrenchDate(current, candidate) {
-  if (!candidate) return current || "";
-  if (!current || parseFrenchDate(candidate) > parseFrenchDate(current)) return candidate;
-  return current;
-}
-
-function parseFrenchDate(value) {
-  const match = String(value || "").match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/);
-  if (!match) return new Date(0);
-  return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), Number(match[4]), Number(match[5]));
-}
-
-function combinePolygons(polygons) {
-  const clean = polygons.filter(Boolean);
-  if (clean.length === 0) return null;
-  if (clean.length === 1) return clean[0];
-
-  const features = [];
-  for (const polygon of clean) {
-    if (!polygon) continue;
-    if (polygon.type === "FeatureCollection") {
-      features.push(...(polygon.features || []));
-    } else if (polygon.type === "Feature") {
-      features.push(polygon);
-    } else {
-      features.push({
-        type: "Feature",
-        geometry: polygon,
-        properties: {},
-      });
-    }
-  }
-  if (features.length === 0) return null;
-  return { type: "FeatureCollection", features };
-}
-
-function uniqueAddresses(addresses) {
-  const unique = [];
-  for (const address of addresses || []) addUniqueAddress(unique, address);
-  return unique;
-}
-
-function addUniqueAddress(addresses, address) {
-  if (!address) return;
-  if (addresses.some((existing) => existing.localisation === address.localisation && existing.nbFoyersCoupes === address.nbFoyersCoupes)) {
-    return;
-  }
-  addresses.push({
-    localisation: address.localisation || "",
+function addUniqueAddress(
+  addresses: Array<OutageAddress>,
+  address: EnedisAddress | OutageAddress,
+): void {
+  const item = {
+    localisation: address.localisation ?? "",
     nbFoyersCoupes: number(address.nbFoyersCoupes),
-  });
+  };
+  if (
+    !addresses.some((existing) =>
+      existing.localisation === item.localisation &&
+      existing.nbFoyersCoupes === item.nbFoyersCoupes
+    )
+  ) addresses.push(item);
 }
-
-function refreshStreetStats(stats, streets) {
-  if (!stats) return;
-  stats.streets = streets.length;
-  stats.geocodedStreets = 0;
-  stats.geocodeMisses = 0;
-  stats.streetGeometry = 0;
-  stats.streetGeometryMisses = 0;
+function refreshStreetStats(
+  stats: OutageStats,
+  streets: ReadonlyArray<Street>,
+): OutageStats {
+  let geocodedStreets = 0,
+    geocodeMisses = 0,
+    streetGeometry = 0,
+    streetGeometryMisses = 0;
   for (const street of streets) {
-    if (street.geocode) {
-      if (street.geocode.status === "ok") stats.geocodedStreets += 1;
-      else stats.geocodeMisses += 1;
-    }
-    if (street.geometry) {
-      if (street.geometry.status === "ok" && street.geometry.lines?.length > 0) stats.streetGeometry += 1;
-      else stats.streetGeometryMisses += 1;
-    }
-  }
-}
-
-function mergeStreet(streetMap, street) {
-  const key = street.key || [street.normalizedName, street.postcode, stripAccents(street.city).toUpperCase()].join("|");
-  const existing = streetMap.get(key);
-  if (!existing) {
-    streetMap.set(key, clone(street));
-    return;
-  }
-  for (const value of street.localisations || []) addUnique(existing.localisations, value);
-  for (const value of street.outageIds || []) addUnique(existing.outageIds, value);
-  for (const value of street.outageTypes || []) addUnique(existing.outageTypes, value);
-  existing.outageIds.sort((left, right) => left.localeCompare(right));
-  existing.outageTypes.sort((left, right) => left.localeCompare(right));
-  existing.nbFoyersCoupes += number(street.nbFoyersCoupes);
-  existing.firstSeenAt = earliestFrenchDate(existing.firstSeenAt, street.firstSeenAt);
-  existing.estimatedRestoreAt = latestFrenchDate(existing.estimatedRestoreAt, street.estimatedRestoreAt);
-  if (!existing.geocode && street.geocode) existing.geocode = clone(street.geocode);
-  if (!existing.geometry && street.geometry) existing.geometry = clone(street.geometry);
-}
-
-function mergeOutage(outageMap, outage) {
-  const key = `${outage.codeInsee || ""}:${outage.id || ""}:${outage.dateCoupure || ""}`;
-  const existing = outageMap.get(key);
-  if (!existing) {
-    outageMap.set(key, clone(outage));
-    return;
-  }
-  existing.dateCoupure = earliestFrenchDate(existing.dateCoupure, outage.dateCoupure);
-  existing.dateRealimentation = latestFrenchDate(existing.dateRealimentation, outage.dateRealimentation);
-  existing.nbFoyersCoupes += number(outage.nbFoyersCoupes);
-  for (const address of outage.addresses || []) addUniqueAddress(existing.addresses, address);
-}
-
-function sourceInfo() {
-  return {
-    enedisEndpoint: ENEDIS_ENDPOINT,
-    geocoderEndpoint: GEOCODE_PRIMARY_ENDPOINT,
-    geocoderFallbackEndpoint: GEOCODE_FALLBACK_ENDPOINT,
-    streetGeometryEndpoint: STREET_GEOMETRY_PRIMARY_ENDPOINT,
-  };
-}
-
-function normalizeOptions(shouldGeocode, geometryBounds) {
-  if (typeof shouldGeocode === "object" && shouldGeocode !== null) {
-    return {
-      geocode: shouldGeocode.geocode !== false,
-      geometry: shouldGeocode.geometry === true,
-      geometryBounds: shouldGeocode.geometryBounds || geometryBounds || null,
-    };
+    if (street.geocode?.status === "ok") geocodedStreets += 1;
+    else if (street.geocode !== undefined) geocodeMisses += 1;
+    if (street.geometry?.status === "ok" && street.geometry.lines.length > 0) {
+      streetGeometry += 1;
+    } else if (street.geometry !== undefined) streetGeometryMisses += 1;
   }
   return {
-    geocode: Boolean(shouldGeocode),
-    geometry: Boolean(shouldGeocode),
-    geometryBounds,
+    ...stats,
+    streets: streets.length,
+    geocodedStreets,
+    geocodeMisses,
+    streetGeometry,
+    streetGeometryMisses,
   };
 }
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function number(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const sourceInfo = () => ({
+  enedisEndpoint: ENEDIS_ENDPOINT,
+  geocoderEndpoint: GEOCODE_PRIMARY_ENDPOINT,
+  geocoderFallbackEndpoint: GEOCODE_FALLBACK_ENDPOINT,
+  streetGeometryEndpoint: STREET_GEOMETRY_PRIMARY_ENDPOINT,
+});
+function number(value: string | number | undefined): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
