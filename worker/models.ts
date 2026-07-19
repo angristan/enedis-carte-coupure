@@ -8,6 +8,7 @@ import type {
   PublicGeocode,
   StreetGeometry,
 } from "../shared/api.js";
+
 export {
   ApiErrorResponseSchema,
   BoundsSchema,
@@ -19,6 +20,7 @@ export {
   StreetGeometrySchema,
   StreetSchema,
 } from "../shared/api.js";
+
 export type {
   ApiErrorResponse,
   Bounds,
@@ -36,11 +38,14 @@ export type {
 } from "../shared/api.js";
 
 export const CoordinatesSchema = Schema.Tuple([Schema.Number, Schema.Number]);
+
 export type Coordinates = Schema.Schema.Type<typeof CoordinatesSchema>;
+
 export const GeoJsonGeometrySchema = Schema.Struct({
   type: Schema.String,
   coordinates: Schema.Unknown,
 });
+
 export type GeoJsonGeometry = Schema.Schema.Type<typeof GeoJsonGeometrySchema>;
 
 export const CommuneSchema = Schema.Struct({
@@ -55,6 +60,7 @@ export const CommuneSchema = Schema.Struct({
   ),
   contour: Schema.optionalKey(Schema.NullOr(GeoJsonGeometrySchema)),
 });
+
 export type Commune = Schema.Schema.Type<typeof CommuneSchema>;
 
 export const EnedisAddressSchema = Schema.Struct({
@@ -63,7 +69,9 @@ export const EnedisAddressSchema = Schema.Struct({
     Schema.Union([Schema.String, Schema.Number]),
   ),
 });
+
 export type EnedisAddress = Schema.Schema.Type<typeof EnedisAddressSchema>;
+
 export const EnedisOutageSchema = Schema.Struct({
   idCoupure: Schema.optionalKey(Schema.String),
   etatCoupure: Schema.optionalKey(Schema.String),
@@ -79,7 +87,9 @@ export const EnedisOutageSchema = Schema.Struct({
   ),
   listeAdresses: Schema.optionalKey(Schema.Array(EnedisAddressSchema)),
 });
+
 export type EnedisOutage = Schema.Schema.Type<typeof EnedisOutageSchema>;
+
 export const EnedisPayloadSchema = Schema.Struct({
   polygon: Schema.optionalKey(Schema.Unknown),
   resultMegacache: Schema.optionalKey(Schema.Struct({
@@ -99,9 +109,11 @@ export const EnedisPayloadSchema = Schema.Struct({
     ),
   })),
 });
+
 export type EnedisPayload = Schema.Schema.Type<typeof EnedisPayloadSchema>;
 
 export type GeocodeResult = PublicGeocode & { readonly cached: boolean };
+
 export const GeocodePayloadSchema = Schema.Struct({
   features: Schema.optionalKey(Schema.Array(Schema.Struct({
     geometry: Schema.Struct({ coordinates: CoordinatesSchema }),
@@ -114,6 +126,7 @@ export const GeocodePayloadSchema = Schema.Struct({
     })),
   }))),
 });
+
 export const OverpassPayloadSchema = Schema.Struct({
   elements: Schema.optionalKey(Schema.Array(Schema.Struct({
     type: Schema.String,
@@ -125,12 +138,15 @@ export const OverpassPayloadSchema = Schema.Struct({
     ),
   }))),
 });
+
 export interface StreetRequest {
   readonly id: string;
   readonly name: string;
   readonly point?: Position;
 }
+
 export type StreetGeometryResults = Readonly<Record<string, StreetGeometry>>;
+
 export interface NormalizeInput {
   readonly raw: EnedisPayload;
   readonly query: EnedisQuery;
@@ -142,14 +158,17 @@ export const CommuneOutageCacheSchema = Schema.Struct({
   freshUntil: Schema.String,
   response: OutageResponseSchema,
 });
+
 export const OutageCacheSchema = Schema.Struct({
   version: Schema.Literal(5),
   refreshedAt: Schema.String,
   freshUntil: Schema.String,
   response: OutageResponseSchema,
 });
+
 export type OutageCacheEntry = Schema.Schema.Type<typeof OutageCacheSchema>;
 export type CommuneOutageCacheEntry = Schema.Schema.Type<
   typeof CommuneOutageCacheSchema
 >;
+
 export { OutageResponseSchema };

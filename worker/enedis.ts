@@ -8,6 +8,7 @@ export const ENEDIS_ORIGIN = "https://www.enedis.fr";
 export const ENEDIS_ENDPOINT = `${ENEDIS_ORIGIN}/panne-interruption-ajax`;
 export const ENEDIS_RESULT_PAGE =
   `${ENEDIS_ORIGIN}/resultat-panne-interruption`;
+
 const DEFAULT_LONGITUDE = "2.347";
 const DEFAULT_LATITUDE = "48.859";
 const DEFAULT_DEPARTMENT = "75";
@@ -40,6 +41,7 @@ export const EnedisLive = Layer.effect(Enedis)(Effect.gen(function* () {
       endpoint.searchParams.set("name", query.name);
       endpoint.searchParams.set("district", query.district);
       endpoint.searchParams.set("city", query.city);
+
       return yield* http.json({
         provider: "Enedis",
         operation: "enedis.fetch",
@@ -55,6 +57,7 @@ export const EnedisLive = Layer.effect(Enedis)(Effect.gen(function* () {
       }, EnedisPayloadSchema);
     },
   );
+
   return { fetch: fetchPayload };
 }));
 
@@ -63,10 +66,12 @@ export function queryFromValues(
 ): EnedisQuery {
   const get = (name: string, fallback: string): string =>
     values.has(name) ? values.get(name) ?? fallback : fallback;
+
   const longitude = values.get("longitude") ?? values.get("long") ?? undefined;
   const latitude = values.get("latitude") ?? values.get("lat") ?? undefined;
   const department = values.get("department") ?? values.get("departement") ??
     undefined;
+
   return {
     insee: get("insee", DEFAULT_QUERY.insee),
     type: get("type", DEFAULT_QUERY.type),

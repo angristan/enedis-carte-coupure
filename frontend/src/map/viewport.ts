@@ -1,6 +1,6 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { Bounds, PublicCommune } from "../../../shared/api.js";
-import { boundsInsideCommuneContours } from "./geometry.js";
+import { boundsInsideCommuneContours } from "./spatial.js";
 
 export const MIN_FETCH_ZOOM = 12;
 const VIEWPORT_GRID = 0.01;

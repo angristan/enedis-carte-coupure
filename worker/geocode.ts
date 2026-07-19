@@ -8,6 +8,7 @@ export const GEOCODE_PRIMARY_ENDPOINT =
   "https://data.geopf.fr/geocodage/search";
 export const GEOCODE_FALLBACK_ENDPOINT =
   "https://api-adresse.data.gouv.fr/search/";
+
 const GEOCODE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 const CachedGeocodeSchema = Schema.Struct({
@@ -42,6 +43,7 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
       const url = new URL(endpoint);
       url.searchParams.set("q", query);
       url.searchParams.set("limit", "1");
+
       const decoded = yield* http.json({
         provider: "geocoder",
         operation: "geocode.lookup",
@@ -55,10 +57,13 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
         },
       }, GeocodePayloadSchema);
       const feature = decoded.features?.[0];
+
       if (feature === undefined) {
         return { status: "miss", query } satisfies PublicGeocode;
       }
+
       const properties = feature.properties;
+
       return {
         status: "ok",
         query,
@@ -76,6 +81,7 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
   const street = Effect.fn("Geocoder.street")(function* (rawQuery: string) {
     const query = rawQuery.trim();
     const key = `geocode:${geocodeKey(query).slice(0, 400)}`;
+
     const cached = yield* cache.get(key, CachedGeocodeSchema, 3600).pipe(
       Effect.catchTag("CacheError", () => Effect.succeed(null)),
     );
@@ -109,8 +115,10 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
         Effect.catchTag("CacheError", () => Effect.void),
       );
     }
+
     return { ...result, cached: false } satisfies GeocodeResult;
   });
+
   return { street };
 }));
 
@@ -132,6 +140,7 @@ export function publicGeocode(result: GeocodeResult): PublicGeocode {
       citycode: result.citycode,
     };
   }
+
   return result.status === "miss"
     ? { status: "miss", query: result.query }
     : { status: "error", query: result.query, message: result.message };

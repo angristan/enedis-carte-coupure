@@ -118,8 +118,10 @@ The frontend keeps React behavior idiomatic:
 
 - `frontend/src/App.tsx` owns request and selection state;
 - `frontend/src/api/client.ts` owns Effect cancellation, typed API errors, and Schema decoding;
-- `frontend/src/map/MapView.tsx` owns MapLibre integration;
-- `frontend/src/map/geometry.ts` and `viewport.ts` contain pure spatial helpers;
+- `frontend/src/map/MapView.tsx` owns MapLibre interaction state;
+- `frontend/src/map/layers.ts` contains the MapLibre style definitions;
+- `frontend/src/map/areaFeatures.ts`, `streetFeatures.ts`, `streetLines.ts`, and `spatial.ts` contain focused GeoJSON and geometry helpers;
+- `frontend/src/map/geometry.ts` remains a small compatibility facade, while `viewport.ts` owns viewport reuse;
 - `frontend/src/components/` contains the side panel and statistics;
 - `frontend/src/domain/streets.ts` contains filtering and display logic.
 

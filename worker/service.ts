@@ -27,7 +27,7 @@ import {
 import { BackgroundTasks, KVStore, WorkerConfig } from "./platform.js";
 import { type CryptoError, sha256Hex } from "./util.js";
 
-interface Result {
+export interface OutageResult {
   readonly response: OutageResponse;
   readonly cache: "HIT" | "STALE" | "MISS";
   readonly refreshedAt?: string;
@@ -38,7 +38,10 @@ interface Result {
     readonly misses: number;
   };
 }
+
+type Result = OutageResult;
 type ServiceError = RequestError | CryptoError;
+
 type CommuneResult = {
   readonly ok: true;
   readonly response: OutageResponse;
@@ -50,12 +53,12 @@ export class OutageService extends Context.Service<OutageService, {
     query: EnedisQuery,
     includeRaw: boolean,
     geocode: boolean,
-  ) => Effect.Effect<Result, ServiceError>;
+  ) => Effect.Effect<OutageResult, ServiceError>;
   readonly viewport: (
     bounds: Bounds,
     includeRaw: boolean,
     geocode: boolean,
-  ) => Effect.Effect<Result, ServiceError>;
+  ) => Effect.Effect<OutageResult, ServiceError>;
 }>()("OutageService") {}
 
 export const OutageServiceLive = Layer.effect(OutageService)(
@@ -66,6 +69,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     const communes = yield* CommuneDirectory;
     const normalizer = yield* Normalizer;
     const background = yield* BackgroundTasks;
+
     const store = Effect.fn("OutageService.store")(
       function* (key: string, response: OutageResponse) {
         if (config.outageCacheTtl <= 0) return;
@@ -81,6 +85,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         );
       },
     );
+
     const freshSingle = Effect.fn("OutageService.freshSingle")(
       function* (query: EnedisQuery, includeRaw: boolean, geocode: boolean) {
         const raw = yield* enedis.fetch(query);
@@ -88,6 +93,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         return includeRaw ? { ...normalized, raw } : normalized;
       },
     );
+
     const single = Effect.fn("OutageService.single")(
       function* (query: EnedisQuery, includeRaw: boolean, geocode: boolean) {
         const key = `outages:${yield* sha256Hex(
@@ -125,6 +131,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         return { response, cache: "MISS" } satisfies Result;
       },
     );
+
     const refreshCommune = Effect.fn("OutageService.refreshCommune")(
       function* (
         key: string,
@@ -161,6 +168,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         return response;
       },
     );
+
     const communeOutage = Effect.fn("OutageService.commune")(
       function* (commune: Commune, geocode: boolean, fallbackBounds: Bounds) {
         const key = `commune-outages:${yield* sha256Hex(
@@ -199,6 +207,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         } satisfies CommuneResult;
       },
     );
+
     const viewport = Effect.fn("OutageService.viewport")(
       function* (bounds: Bounds, includeRaw: boolean, geocode: boolean) {
         const visible = yield* communes.forBounds(bounds, 30);
@@ -265,6 +274,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         } satisfies Result;
       },
     );
+
     return { single, viewport };
   }),
 );

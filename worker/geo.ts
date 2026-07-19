@@ -4,11 +4,14 @@ export interface Bounds {
   readonly north: number;
   readonly east: number;
 }
+
 export interface Position {
   readonly lat: number;
   readonly lng: number;
 }
+
 type BoundsValues = Pick<URLSearchParams, "get" | "has">;
+
 export type ParsedBounds = { readonly hasBounds: false } | {
   readonly hasBounds: true;
   readonly bounds: Bounds;
@@ -53,9 +56,13 @@ export const center = (bounds: Bounds): Position => ({
   lat: (bounds.south + bounds.north) / 2,
   lng: (bounds.west + bounds.east) / 2,
 });
+
 export const height = (bounds: Bounds): number => bounds.north - bounds.south;
+
 export const width = (bounds: Bounds): number => bounds.east - bounds.west;
+
 export const area = (bounds: Bounds): number => height(bounds) * width(bounds);
+
 export function padded(bounds: Bounds, ratio: number): Bounds {
   if (ratio <= 0) return bounds;
   return {
@@ -65,6 +72,7 @@ export function padded(bounds: Bounds, ratio: number): Bounds {
     east: clampLongitude(bounds.east + width(bounds) * ratio),
   };
 }
+
 export function snapped(bounds: Bounds, grid: number): Bounds {
   if (grid <= 0) return bounds;
   return {
@@ -74,10 +82,12 @@ export function snapped(bounds: Bounds, grid: number): Bounds {
     east: clampLongitude(Math.ceil(bounds.east / grid) * grid),
   };
 }
+
 export const boundsCacheKey = (bounds: Bounds): string =>
   [bounds.south, bounds.west, bounds.north, bounds.east].map((value) =>
     value.toFixed(4)
   ).join(",");
+
 export const overpassBBox = (bounds: Bounds): string =>
   [bounds.south, bounds.west, bounds.north, bounds.east].map((value) =>
     value.toFixed(6)
@@ -137,14 +147,18 @@ function normalizeAndValidate(input: Bounds): ParsedBounds {
   }
   return { hasBounds: true, bounds };
 }
+
 function parseCoordinate(value: string | null, name: string): number | string {
   const parsed = Number.parseFloat(trim(value));
   return Number.isFinite(parsed) ? parsed : `invalid ${name}`;
 }
+
 const clampLatitude = (value: number): number =>
   Math.max(-90, Math.min(90, value));
+
 const clampLongitude = (value: number): number =>
   Math.max(-180, Math.min(180, value));
+
 function visitCoordinates(
   value: unknown,
   state: {
@@ -167,6 +181,8 @@ function visitCoordinates(
     state.found = true;
     return;
   }
+
   for (const item of value) visitCoordinates(item, state);
 }
+
 const trim = (value: string | null): string => value?.trim() ?? "";

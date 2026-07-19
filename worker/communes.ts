@@ -34,6 +34,7 @@ const ApiCommuneSchema = Schema.Struct({
   ),
 });
 const ApiCommunesSchema = Schema.Array(ApiCommuneSchema);
+
 const CachedCommunesSchema = Schema.Struct({
   version: Schema.Literal(3),
   updatedAt: Schema.String,
@@ -63,6 +64,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
     const http = yield* RawHttp;
     const cache = yield* KVStore;
     const config = yield* WorkerConfig;
+
     const lookupPoint = Effect.fn("CommuneDirectory.lookupPoint")(
       function* (point: Position) {
         const url = new URL(COMMUNES_ENDPOINT);
@@ -84,6 +86,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
         }, ApiCommunesSchema);
         const first = decoded[0];
         if (first === undefined) return null;
+
         return {
           name: first.nom,
           code: first.code,
@@ -103,6 +106,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
         if (cached !== null) {
           return cached.communes;
         }
+
         const results = yield* Effect.forEach(
           samplePoints(bounds),
           (point): Effect.Effect<LookupResult> =>
@@ -116,6 +120,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
             ),
           { concurrency: LOOKUP_CONCURRENCY },
         );
+
         const seen = new Map<string, Commune>();
         let lastError: UpstreamError | undefined;
         for (const result of results) {
@@ -127,18 +132,21 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
             seen.set(result.commune.code, result.commune);
           }
         }
+
         if (maximum > 0 && seen.size > maximum) {
           return yield* TooManyCommunes.make({
             maximum,
             message: `viewport covers more than ${maximum} communes; zoom in`,
           });
         }
+
         const communes = Array.from(seen.values()).sort((left, right) =>
           left.code.localeCompare(right.code)
         );
         if (communes.length === 0 && lastError !== undefined) {
           return yield* lastError;
         }
+
         const now = yield* Clock.currentTimeMillis;
         yield* cache.set(cacheKey, {
           version: 3,
@@ -151,6 +159,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
         return communes;
       },
     );
+
     return { forBounds };
   }),
 );
@@ -172,8 +181,10 @@ function samplePoints(bounds: Bounds): ReadonlyArray<Position> {
       }
     }
   }
+
   return points;
 }
+
 const interpolate = (
   min: number,
   max: number,
@@ -202,11 +213,13 @@ export function enedisQueryForCommune(commune: Commune): EnedisQuery {
     }),
   };
 }
+
 function departmentFromCode(code: string): string {
   return code.length >= 3 && (code.startsWith("97") || code.startsWith("98"))
     ? code.slice(0, 3)
     : code.slice(0, 2);
 }
+
 export function boundsForCommune(
   commune: Commune,
   fallbackBounds?: Bounds,
@@ -216,8 +229,10 @@ export function boundsForCommune(
     return padded(contourBounds, GEOMETRY_PADDING_RATIO);
   }
   if (fallbackBounds !== undefined) return fallbackBounds;
+
   const coordinates = commune.center?.coordinates;
   if (coordinates === undefined) return undefined;
+
   return {
     south: coordinates[1] - 0.03,
     west: coordinates[0] - 0.03,

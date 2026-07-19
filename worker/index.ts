@@ -21,13 +21,19 @@ import {
   WorkerConfig,
   type WorkerEnv,
 } from "./platform.js";
-import { OutageService, OutageServiceLive } from "./service.js";
+import {
+  type OutageResult,
+  OutageService,
+  OutageServiceLive,
+} from "./service.js";
 import { StreetGeometryProviderLive } from "./streetgeom.js";
 import type { CryptoError } from "./util.js";
 
 const MAX_VIEWPORT_AREA = 0.35;
 const MAX_VIEWPORT_SPAN = 1;
+
 type HandlerError = RequestError | CryptoError;
+
 const run = <A>(effect: Effect.Effect<A>): Promise<A> =>
   Effect.runPromise(effect);
 
@@ -59,10 +65,12 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
       message: "method not allowed",
     });
   }
+
   const service = yield* OutageService;
   const parsed = parseBounds(url.searchParams);
   const includeRaw = url.searchParams.get("raw") === "1";
   const geocode = url.searchParams.get("geocode") !== "0";
+
   let result;
   if (!parsed.hasBounds) {
     result = yield* service.single(
@@ -83,14 +91,24 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
   } else {
     result = yield* service.viewport(parsed.bounds, includeRaw, geocode);
   }
+
   const encoded = yield* Schema.encodeUnknownEffect(OutageResponseSchema)(
     result.response,
   ).pipe(Effect.orDie);
   const response = json(encoded);
+  setCacheHeaders(response, result);
+
+  return request.method === "HEAD"
+    ? new Response(null, { status: response.status, headers: response.headers })
+    : response;
+});
+
+function setCacheHeaders(response: Response, result: OutageResult): void {
   response.headers.set(
     "X-App-Cache",
     result.communeStats === undefined ? result.cache : "COMMUNE",
   );
+
   if (result.refreshedAt !== undefined) {
     response.headers.set("X-App-Cache-Refreshed-At", result.refreshedAt);
   }
@@ -100,24 +118,21 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
   if (result.cache === "STALE") {
     response.headers.set("X-App-Cache-Refresh", "background");
   }
-  if (result.communeStats !== undefined) {
-    response.headers.set(
-      "X-App-Cache-Commune-Hits",
-      String(result.communeStats.hits),
-    );
-    response.headers.set(
-      "X-App-Cache-Commune-Stale",
-      String(result.communeStats.stale),
-    );
-    response.headers.set(
-      "X-App-Cache-Commune-Misses",
-      String(result.communeStats.misses),
-    );
-  }
-  return request.method === "HEAD"
-    ? new Response(null, { status: response.status, headers: response.headers })
-    : response;
-});
+  if (result.communeStats === undefined) return;
+
+  response.headers.set(
+    "X-App-Cache-Commune-Hits",
+    String(result.communeStats.hits),
+  );
+  response.headers.set(
+    "X-App-Cache-Commune-Stale",
+    String(result.communeStats.stale),
+  );
+  response.headers.set(
+    "X-App-Cache-Commune-Misses",
+    String(result.communeStats.misses),
+  );
+}
 
 function errorResponse(error: HandlerError): Response {
   switch (error._tag) {
@@ -192,6 +207,7 @@ export default {
     return run(program(request, env, context));
   },
 } satisfies ExportedHandler<WorkerEnv>;
+
 function json(payload: unknown, status = 200): Response {
   return new Response(`${JSON.stringify(payload)}\n`, {
     status,
@@ -201,6 +217,7 @@ function json(payload: unknown, status = 200): Response {
     },
   });
 }
+
 function apiError(
   error: string,
   message: string,
@@ -214,4 +231,5 @@ function apiError(
   });
   return json(body, status);
 }
+
 export const testExports = { errorResponse };

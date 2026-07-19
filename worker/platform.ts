@@ -97,6 +97,7 @@ export class RawHttp extends Context.Service<RawHttp, {
 
 export const RawHttpLive = Layer.effect(RawHttp)(Effect.gen(function* () {
   const requestContext = yield* RequestContext;
+
   const json = Effect.fn("RawHttp.json")(
     function* <A>(
       request: HttpRequest,
@@ -124,6 +125,7 @@ export const RawHttpLive = Layer.effect(RawHttp)(Effect.gen(function* () {
             cause,
           }),
       });
+
       if (!result.response.ok) {
         return yield* UpstreamStatusError.make({
           provider: request.provider,
@@ -142,6 +144,7 @@ export const RawHttpLive = Layer.effect(RawHttp)(Effect.gen(function* () {
             message: `invalid JSON: ${String(cause)}`,
           }),
       });
+
       return yield* Schema.decodeUnknownEffect(schema)(unknownJson).pipe(
         Effect.mapError((error) =>
           UpstreamDecodeError.make({
@@ -152,6 +155,7 @@ export const RawHttpLive = Layer.effect(RawHttp)(Effect.gen(function* () {
       );
     },
   );
+
   return { json };
 }));
 
@@ -172,8 +176,10 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
   return Layer.effect(KVStore)(Effect.gen(function* () {
     const config = yield* WorkerConfig;
     const requestContext = yield* RequestContext;
+
     const fullKey = (key: string): string =>
       config.cachePrefix ? `${config.cachePrefix}:${key}` : key;
+
     const get = Effect.fn("KVStore.get")(
       function* <A>(
         key: string,
@@ -196,6 +202,7 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         if (value === null) {
           return null;
         }
+
         return yield* Schema.decodeUnknownEffect(schema)(value).pipe(
           Effect.mapError((cause) =>
             CacheError.make({ operation: "decode", key, cause })
@@ -203,6 +210,7 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         );
       },
     );
+
     const set = Effect.fn("KVStore.set")(
       function* (key: string, value: unknown, expirationTtl?: number) {
         if (!namespace) return;
@@ -211,6 +219,7 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         if (expirationTtl !== undefined) {
           options.expirationTtl = Math.max(60, Math.ceil(expirationTtl));
         }
+
         yield* Effect.tryPromise({
           try: () =>
             tracedPromise(requestContext.trace, "cache.put", {
@@ -220,6 +229,7 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         });
       },
     );
+
     return { get, set };
   }));
 }

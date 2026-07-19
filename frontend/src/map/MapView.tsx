@@ -8,24 +8,31 @@ import {
 } from "react";
 import MapGL, {
   Layer,
-  type LayerProps,
   type MapLayerMouseEvent,
   type MapRef,
   NavigationControl,
   Popup,
   Source,
 } from "react-map-gl/maplibre";
-import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
-import { Option, Schema } from "effect";
 import type { OutageResponse, Street } from "../../../shared/api.js";
 import { StreetPopup } from "../components/SidePanel.js";
-import { streetBounds, streetFeatureCollection } from "./geometry.js";
+import { decodeAreaFeatureCollection } from "./areaFeatures.js";
+import {
+  INITIAL_VIEW_STATE,
+  MAP_STYLE_URL,
+  OUTAGE_AREA_SOURCE_ID,
+  OUTAGE_STREET_SOURCE_ID,
+  POLYGON_FILL_LAYER,
+  POLYGON_LINE_LAYER,
+  STREET_CASING_LAYER,
+  STREET_LINE_LAYER,
+  STREET_LINE_LAYER_ID,
+  STREET_POINT_LAYER,
+  STREET_POINT_LAYER_ID,
+} from "./layers.js";
+import { streetFeatureCollection } from "./streetFeatures.js";
+import { streetBounds } from "./streetLines.js";
 import { type Viewport, viewportFromMap } from "./viewport.js";
-
-const INITIAL_CENTER = { latitude: 48.8566, longitude: 2.3522 };
-const INITIAL_ZOOM = 12;
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-const OUTAGE_SOURCE_ID = "outage-streets";
 
 export interface MapViewHandle {
   focusStreet(streetKey: string): void;
@@ -51,88 +58,6 @@ interface StreetPopupState {
   readonly longitude: number;
   readonly latitude: number;
 }
-
-const POLYGON_FILL_LAYER: LayerProps = {
-  id: "outage-area-fill",
-  type: "fill",
-  paint: { "fill-color": "#5db79e", "fill-opacity": 0.07 },
-};
-
-const POLYGON_LINE_LAYER: LayerProps = {
-  id: "outage-area-line",
-  type: "line",
-  paint: { "line-color": "#277783", "line-width": 1.3, "line-opacity": 0.65 },
-};
-
-const STREET_CASING_LAYER: LayerProps = {
-  id: "outage-street-casing",
-  type: "line",
-  filter: ["==", ["geometry-type"], "LineString"],
-  layout: { "line-cap": "round", "line-join": "round" },
-  paint: {
-    "line-color": "#fffdf7",
-    "line-opacity": [
-      "case",
-      ["boolean", ["feature-state", "hovered"], false],
-      0.98,
-      0.86,
-    ],
-    "line-width": [
-      "+",
-      ["get", "lineWidth"],
-      [
-        "case",
-        ["boolean", ["get", "selected"], false],
-        5.4,
-        ["boolean", ["feature-state", "hovered"], false],
-        5.4,
-        4.2,
-      ],
-    ],
-  },
-};
-
-const STREET_LINE_LAYER: LayerProps = {
-  id: "outage-street-line",
-  type: "line",
-  filter: ["==", ["geometry-type"], "LineString"],
-  layout: { "line-cap": "round", "line-join": "round" },
-  paint: {
-    "line-color": ["get", "color"],
-    "line-opacity": 0.94,
-    "line-width": [
-      "+",
-      ["get", "lineWidth"],
-      [
-        "case",
-        ["boolean", ["get", "selected"], false],
-        1.8,
-        ["boolean", ["feature-state", "hovered"], false],
-        1.8,
-        0,
-      ],
-    ],
-  },
-};
-
-const STREET_POINT_LAYER: LayerProps = {
-  id: "outage-street-point",
-  type: "circle",
-  filter: ["==", ["geometry-type"], "Point"],
-  paint: {
-    "circle-color": ["get", "color"],
-    "circle-opacity": 0.86,
-    "circle-radius": ["+", ["get", "radius"], [
-      "case",
-      ["boolean", ["get", "selected"], false],
-      2,
-      0,
-    ]],
-    "circle-stroke-color": "#ffffff",
-    "circle-stroke-opacity": 0.96,
-    "circle-stroke-width": 3,
-  },
-};
 
 export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   {
@@ -164,32 +89,43 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
 
   const clearHover = useCallback(() => {
     const map = mapRef.current?.getMap();
-    if (map?.getSource(OUTAGE_SOURCE_ID) && hoveredKeyRef.current.length > 0) {
+
+    if (
+      map?.getSource(OUTAGE_STREET_SOURCE_ID) &&
+      hoveredKeyRef.current.length > 0
+    ) {
       map.setFeatureState({
-        source: OUTAGE_SOURCE_ID,
+        source: OUTAGE_STREET_SOURCE_ID,
         id: hoveredKeyRef.current,
       }, { hovered: false });
     }
+
     hoveredKeyRef.current = "";
     setHover(null);
   }, []);
 
   const setHoveredStreet = useCallback((streetKey: string) => {
     const map = mapRef.current?.getMap();
+
     if (
-      !map?.getSource(OUTAGE_SOURCE_ID) || hoveredKeyRef.current === streetKey
+      !map?.getSource(OUTAGE_STREET_SOURCE_ID) ||
+      hoveredKeyRef.current === streetKey
     ) return;
+
     if (hoveredKeyRef.current.length > 0) {
       map.setFeatureState({
-        source: OUTAGE_SOURCE_ID,
+        source: OUTAGE_STREET_SOURCE_ID,
         id: hoveredKeyRef.current,
       }, { hovered: false });
     }
+
     hoveredKeyRef.current = streetKey;
+
     if (streetKey.length > 0) {
-      map.setFeatureState({ source: OUTAGE_SOURCE_ID, id: streetKey }, {
-        hovered: true,
-      });
+      map.setFeatureState({
+        source: OUTAGE_STREET_SOURCE_ID,
+        id: streetKey,
+      }, { hovered: true });
     }
   }, []);
 
@@ -219,7 +155,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
       const { x, y } = event.point;
       return map.queryRenderedFeatures(
         [[x - radius, y - radius], [x + radius, y + radius]],
-        { layers: ["outage-street-line", "outage-street-point"] },
+        { layers: [STREET_LINE_LAYER_ID, STREET_POINT_LAYER_ID] },
       )[0];
     },
     [],
@@ -266,8 +202,8 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         ref={mapRef}
         cursor={hover === null ? undefined : "pointer"}
         dragRotate={false}
-        initialViewState={{ ...INITIAL_CENTER, zoom: INITIAL_ZOOM }}
-        mapStyle={MAP_STYLE}
+        initialViewState={INITIAL_VIEW_STATE}
+        mapStyle={MAP_STYLE_URL}
         maxPitch={0}
         maxZoom={19}
         minZoom={4}
@@ -285,14 +221,18 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         <NavigationControl position="bottom-left" showCompass={false} />
         {areaGeoJson !== undefined && areaGeoJson.features.length > 0
           ? (
-            <Source id="outage-area" type="geojson" data={areaGeoJson}>
+            <Source
+              id={OUTAGE_AREA_SOURCE_ID}
+              type="geojson"
+              data={areaGeoJson}
+            >
               <Layer {...POLYGON_FILL_LAYER} />
               <Layer {...POLYGON_LINE_LAYER} />
             </Source>
           )
           : null}
         <Source
-          id={OUTAGE_SOURCE_ID}
+          id={OUTAGE_STREET_SOURCE_ID}
           type="geojson"
           data={outageGeoJson}
           promoteId="key"
@@ -327,62 +267,6 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     </div>
   );
 });
-
-const PositionSchema = Schema.Array(Schema.Number);
-const PolygonSchema = Schema.Struct({
-  type: Schema.Literal("Polygon"),
-  coordinates: Schema.Array(Schema.Array(PositionSchema)),
-});
-const MultiPolygonSchema = Schema.Struct({
-  type: Schema.Literal("MultiPolygon"),
-  coordinates: Schema.Array(Schema.Array(Schema.Array(PositionSchema))),
-});
-const AreaFeatureCollectionSchema = Schema.Struct({
-  type: Schema.Literal("FeatureCollection"),
-  features: Schema.Array(Schema.Struct({
-    type: Schema.Literal("Feature"),
-    geometry: Schema.Union([PolygonSchema, MultiPolygonSchema]),
-    properties: Schema.optionalKey(Schema.Unknown),
-  })),
-});
-const decodeArea = Schema.decodeUnknownOption(AreaFeatureCollectionSchema);
-
-type AreaFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
-
-function decodeAreaFeatureCollection(
-  input: unknown,
-): AreaFeatureCollection | undefined {
-  const decoded = decodeArea(input);
-  if (Option.isNone(decoded)) return undefined;
-  return {
-    type: "FeatureCollection",
-    features: decoded.value.features.map((feature) => ({
-      type: "Feature",
-      properties: objectOrEmpty(feature.properties),
-      geometry: feature.geometry.type === "Polygon"
-        ? {
-          type: "Polygon",
-          coordinates: feature.geometry.coordinates.map(copyRings),
-        }
-        : {
-          type: "MultiPolygon",
-          coordinates: feature.geometry.coordinates.map((polygon) =>
-            polygon.map(copyRings)
-          ),
-        },
-    })),
-  };
-}
-
-function copyRings(
-  ring: ReadonlyArray<ReadonlyArray<number>>,
-): Array<Array<number>> {
-  return ring.map((position) => [...position]);
-}
-
-function objectOrEmpty(value: unknown): object {
-  return typeof value === "object" && value !== null ? value : {};
-}
 
 function stringValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number"

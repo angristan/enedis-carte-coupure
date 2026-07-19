@@ -5,6 +5,7 @@ import {
   normalizeStreet,
   parseLocalisation,
 } from "./outages.js";
+import { normalizeOutageInputs } from "./outage-response.js";
 
 function response(
   polygon: unknown,
@@ -47,6 +48,67 @@ function response(
     ...(crises === undefined ? {} : { crises }),
   };
 }
+
+describe("outage normalization", () => {
+  it("merges repeated outages and deduplicates their addresses", () => {
+    const normalized = normalizeOutageInputs([{
+      query: {
+        insee: "75056",
+        type: "municipality",
+        adresse: "Paris",
+        CPVille: "Paris 75001",
+        name: "Paris",
+        district: "",
+        city: "Paris",
+      },
+      raw: {
+        resultMegacache: {
+          compteurIncidentHTA: "2",
+          compteurTravauxHTA: 1,
+          compteurBT: "3",
+          listeCoupuresInfoReseau: [
+            {
+              idCoupure: "outage-1",
+              dateCoupure: "21/03/2026 10:00",
+              dateRealimentation: "21/03/2026 12:00",
+              nbFoyersCoupes: "5",
+              listeAdresses: [{
+                localisation: "12 R. de Longchamp, PARIS 16 (75116)",
+                nbFoyersCoupes: "2",
+              }],
+            },
+            {
+              idCoupure: "outage-1",
+              dateCoupure: "21/03/2026 09:00",
+              dateRealimentation: "21/03/2026 13:00",
+              nbFoyersCoupes: 3,
+              listeAdresses: [{
+                localisation: "12 R. de Longchamp, PARIS 16 (75116)",
+                nbFoyersCoupes: 2,
+              }],
+            },
+          ],
+        },
+      },
+    }], "2026-03-21T08:00:00.000Z");
+
+    assert.strictEqual(normalized.outages.length, 1);
+    assert.strictEqual(normalized.outages[0]?.nbFoyersCoupes, 8);
+    assert.strictEqual(normalized.outages[0]?.dateCoupure, "21/03/2026 09:00");
+    assert.strictEqual(
+      normalized.outages[0]?.dateRealimentation,
+      "21/03/2026 13:00",
+    );
+    assert.deepEqual(normalized.outages[0]?.addresses, [{
+      localisation: "12 R. de Longchamp, PARIS 16 (75116)",
+      nbFoyersCoupes: 2,
+    }]);
+    assert.strictEqual(normalized.stats.addressRows, 2);
+    assert.strictEqual(normalized.stats.compteurIncidentHTA, 2);
+    assert.strictEqual(normalized.stats.compteurTravauxHTA, 1);
+    assert.strictEqual(normalized.stats.compteurBT, 3);
+  });
+});
 
 describe("outage street parsing", () => {
   it("normalizes abbreviations and address numbers", () => {

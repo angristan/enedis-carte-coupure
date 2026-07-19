@@ -112,7 +112,8 @@ The main modules are intentionally separated by responsibility:
 - `worker/platform.ts` provides configuration, HTTP, KV, request context, and background-task services.
 - `worker/service.ts` owns outage caching and viewport orchestration.
 - `worker/communes.ts`, `enedis.ts`, `geocode.ts`, and `streetgeom.ts` are provider services.
-- `worker/outages.ts` separates pure normalization from provider-backed enrichment.
+- `worker/streetgeom-overpass.ts` and `streetgeom-geometry.ts` isolate query building and geometry math.
+- `worker/outages.ts` owns provider-backed enrichment; `outage-response.ts`, `outage-merging.ts`, `outage-values.ts`, `outage-polygons.ts`, and `street-normalization.ts` contain focused pure transformations.
 - `worker/errors.ts` defines the typed failure contract.
 - `frontend/src/api/client.ts` performs abortable requests and validates responses before React sees them.
 
