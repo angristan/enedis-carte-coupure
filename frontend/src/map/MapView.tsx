@@ -32,7 +32,11 @@ import {
 } from "./layers.js";
 import { streetFeatureCollection } from "./streetFeatures.js";
 import { streetBounds } from "./streetLines.js";
-import { type Viewport, viewportFromMap } from "./viewport.js";
+import {
+  MIN_VIEWPORT_ZOOM,
+  type Viewport,
+  viewportFromMap,
+} from "./viewport.js";
 
 export interface MapViewHandle {
   focusStreet(streetKey: string): void;
@@ -206,7 +210,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         mapStyle={MAP_STYLE_URL}
         maxPitch={0}
         maxZoom={19}
-        minZoom={4}
+        minZoom={MIN_VIEWPORT_ZOOM}
         onClick={handleMapClick}
         onLoad={(event) => onViewportChange(viewportFromMap(event.target))}
         onMouseLeave={clearHover}

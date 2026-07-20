@@ -71,10 +71,10 @@ function streetFeatureProperties(
 }
 
 function markerColor(street: Street): string {
-  if (street.outageTypes.includes("Incident HTA")) return "#d84a3a";
-  if (street.outageTypes.includes("Incident BT")) return "#db7100";
+  if (street.outageTypes.includes("Incident HTA")) return "#e45245";
+  if (street.outageTypes.includes("Incident BT")) return "#e98a19";
 
-  return "#087b72";
+  return "#087d70";
 }
 
 function markerRadius(street: Street): number {

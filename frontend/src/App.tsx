@@ -6,11 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { RotateCw } from "lucide-react";
+import { RotateCw, Zap } from "lucide-react";
 import type { OutageResponse, Street } from "../../shared/api.js";
+import { viewportIsWithinLimits } from "../../shared/viewport.js";
 import { runOutageRequest } from "./api/client.js";
 import { SidePanel } from "./components/SidePanel.js";
-import { StatsStrip } from "./components/StatsStrip.js";
 import {
   buildStatusText,
   filterStreets,
@@ -20,7 +20,7 @@ import { MapView, type MapViewHandle } from "./map/MapView.js";
 import {
   boundsContain,
   coverageContains,
-  MIN_FETCH_ZOOM,
+  MIN_VIEWPORT_ZOOM,
   type ResponseCoverage,
   type Viewport,
   type ViewportRequest,
@@ -53,18 +53,20 @@ export function App() {
   const loadViewport = useCallback(
     async (nextViewport: Viewport | null, options: LoadOptions = {}) => {
       if (nextViewport === null) return;
-      if (nextViewport.zoom < MIN_FETCH_ZOOM) {
+      const request = viewportRequest(nextViewport.bounds);
+      if (
+        nextViewport.zoom < MIN_VIEWPORT_ZOOM ||
+        !viewportIsWithinLimits(request.bounds)
+      ) {
         abortRef.current?.abort();
         abortRef.current = null;
         activeRequestRef.current = null;
         lastLoadedRequestRef.current = null;
         setLoading(false);
         setData(null);
-        setStatus("Zoomez pour charger les rues touchées dans la vue.");
+        setStatus("Zoomez davantage pour charger les rues touchées.");
         return;
       }
-
-      const request = viewportRequest(nextViewport.bounds);
       const lastLoadedRequest = lastLoadedRequestRef.current;
       if (
         options.force !== true &&
@@ -169,13 +171,19 @@ export function App() {
 
         <header className="map-topbar">
           <div className="brand-panel">
-            <span className={loading ? "status-dot loading" : "status-dot"} />
+            <span className="brand-mark" aria-hidden="true">
+              <Zap size={19} strokeWidth={2.4} />
+            </span>
             <div className="brand-copy">
-              <h1>Rues touchées Enedis</h1>
+              <div className="brand-kicker">
+                <span className={loading ? "status-dot loading" : "status-dot"} />
+                <span>{loading ? "Mise à jour en cours" : "Réseau en direct"}</span>
+              </div>
+              <h1>Carte des coupures</h1>
               <p>{status}</p>
             </div>
           </div>
-          <div className="map-actions" aria-label="Actions">
+          <div className="map-actions" aria-label="Actions de la carte">
             <button
               type="button"
               onClick={handleRefresh}
@@ -200,7 +208,6 @@ export function App() {
           </div>
         </header>
 
-        <StatsStrip stats={data?.stats} />
       </section>
 
       <SidePanel

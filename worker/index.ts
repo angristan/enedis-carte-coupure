@@ -1,5 +1,6 @@
 import { Cause, Effect, Layer, Schema } from "effect";
 import { ApiErrorResponseSchema, OutageResponseSchema } from "../shared/api.js";
+import { viewportIsWithinLimits } from "../shared/viewport.js";
 import { CommuneDirectoryLive } from "./communes.js";
 import { EnedisLive, queryFromValues } from "./enedis.js";
 import type { RequestError } from "./errors.js";
@@ -8,7 +9,7 @@ import {
   MethodNotAllowed,
   ViewportTooLarge,
 } from "./errors.js";
-import { area, height, parseBounds, width } from "./geo.js";
+import { parseBounds } from "./geo.js";
 import { GeocoderLive } from "./geocode.js";
 import { NormalizerLive } from "./outages.js";
 import {
@@ -28,9 +29,6 @@ import {
 } from "./service.js";
 import { StreetGeometryProviderLive } from "./streetgeom.js";
 import type { CryptoError } from "./util.js";
-
-const MAX_VIEWPORT_AREA = 0.35;
-const MAX_VIEWPORT_SPAN = 1;
 
 type HandlerError = RequestError | CryptoError;
 
@@ -80,11 +78,7 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
     );
   } else if ("error" in parsed) {
     return yield* InvalidViewport.make({ message: parsed.error });
-  } else if (
-    area(parsed.bounds) > MAX_VIEWPORT_AREA ||
-    height(parsed.bounds) > MAX_VIEWPORT_SPAN ||
-    width(parsed.bounds) > MAX_VIEWPORT_SPAN
-  ) {
+  } else if (!viewportIsWithinLimits(parsed.bounds)) {
     return yield* ViewportTooLarge.make({
       message: "viewport is too large; zoom in",
     });

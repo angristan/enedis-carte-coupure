@@ -1,5 +1,17 @@
-import { type ChangeEvent, forwardRef } from "react";
-import { Clock3, type LucideIcon, MapPinned, Search } from "lucide-react";
+import {
+  type ChangeEvent,
+  forwardRef,
+  useEffect,
+  useRef,
+} from "react";
+import {
+  Activity,
+  ChevronRight,
+  Clock3,
+  type LucideIcon,
+  MapPinned,
+  Search,
+} from "lucide-react";
 import type { OutageResponse, Street } from "../../../shared/api.js";
 import {
   detailText,
@@ -37,50 +49,86 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
     ref,
   ) {
     const communeCount = data?.communes?.length ?? data?.queries?.length;
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const allStreets = data?.streets ?? [];
+    const filterCounts: Record<StreetFilter, number> = {
+      all: allStreets.length,
+      "Incident HTA": allStreets.filter((street) =>
+        street.outageTypes.includes("Incident HTA")
+      ).length,
+      "Incident BT": allStreets.filter((street) =>
+        street.outageTypes.includes("Incident BT")
+      ).length,
+    };
     const handleQueryChange = (event: ChangeEvent<HTMLInputElement>): void => {
       onQueryChange(event.target.value);
     };
 
+    useEffect(() => {
+      const focusSearch = (event: KeyboardEvent): void => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+          event.preventDefault();
+          searchInputRef.current?.focus();
+        }
+      };
+      window.addEventListener("keydown", focusSearch);
+      return () => window.removeEventListener("keydown", focusSearch);
+    }, []);
+
     return (
       <aside className="side-pane" aria-label="Détails des coupures">
         <div className="side-header">
-          <div>
-            <p className="eyebrow">Vue active</p>
-            <h2>{formatNumber(streets.length)} rues visibles</h2>
+          <div className="side-heading">
+            <p className="eyebrow">
+              <Activity size={13} aria-hidden="true" />
+              Veille réseau
+            </p>
+            <h2><strong>{formatNumber(allStreets.length)}</strong> rues touchées</h2>
+            <p className="side-subtitle">dans la zone affichée</p>
           </div>
+          <p className="source-badge">
+            Source&nbsp;: Enedis<span> · service non officiel</span>
+          </p>
         </div>
 
         <label className="search-box">
           <Search size={18} aria-hidden="true" />
           <span className="sr-only">Recherche</span>
           <input
+            ref={searchInputRef}
             value={query}
             type="search"
-            placeholder="Rue, commune, incident"
+            placeholder="Rechercher une rue, une commune..."
             autoComplete="off"
             onChange={handleQueryChange}
           />
+          <span className="search-hint" aria-hidden="true">⌘ K</span>
         </label>
 
         <SegmentedFilter
           activeFilter={activeFilter}
+          counts={filterCounts}
           onChange={onFilterChange}
         />
 
         <div className="insight-grid" aria-label="Résumé">
           <Insight
             icon={MapPinned}
-            label="Communes"
-            value={formatNumber(communeCount)}
+            label="Zone analysée"
+            value={`${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
           />
           <Insight
             icon={Clock3}
-            label="Mis à jour"
+            label="Actualisation"
             value={formatTime(data?.updatedAt)}
           />
         </div>
 
         <Legend />
+        <div className="list-heading">
+          <span>Rues signalées</span>
+          <strong>{formatNumber(streets.length)}</strong>
+        </div>
         <StreetList
           ref={ref}
           activeKey={activeKey}
@@ -94,6 +142,7 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
 
 interface SegmentedFilterProps {
   readonly activeFilter: StreetFilter;
+  readonly counts: Readonly<Record<StreetFilter, number>>;
   readonly onChange: (filter: StreetFilter) => void;
 }
 
@@ -103,7 +152,9 @@ const filterItems: ReadonlyArray<readonly [StreetFilter, string]> = [
   ["Incident BT", "BT"],
 ];
 
-function SegmentedFilter({ activeFilter, onChange }: SegmentedFilterProps) {
+function SegmentedFilter(
+  { activeFilter, counts, onChange }: SegmentedFilterProps,
+) {
   return (
     <div className="segmented" role="group" aria-label="Filtrer les coupures">
       {filterItems.map(([value, label]) => (
@@ -113,7 +164,8 @@ function SegmentedFilter({ activeFilter, onChange }: SegmentedFilterProps) {
           type="button"
           onClick={() => onChange(value)}
         >
-          {label}
+          <span>{label}</span>
+          <small>{formatNumber(counts[value])}</small>
         </button>
       ))}
     </div>
@@ -138,20 +190,17 @@ function Insight({ icon: Icon, label, value }: InsightProps) {
 
 function Legend() {
   return (
-    <dl className="legend">
-      <div>
-        <dt>
-          <span className="legend-dot hta" />HTA
-        </dt>
-        <dd>Incident moyenne tension, souvent étendu.</dd>
+    <div className="legend" aria-label="Légende des incidents">
+      <div className="legend-item">
+        <strong><span className="legend-dot hta" />HTA</strong>
+        <span>Moyenne tension</span>
       </div>
-      <div>
-        <dt>
-          <span className="legend-dot bt" />BT
-        </dt>
-        <dd>Incident basse tension, plus localisé.</dd>
+      <div className="legend-item">
+        <strong><span className="legend-dot bt" />BT</strong>
+        <span>Basse tension</span>
       </div>
-    </dl>
+      <p>Les tracés colorés indiquent les rues concernées.</p>
+    </div>
   );
 }
 
@@ -200,6 +249,10 @@ const StreetList = forwardRef<HTMLDivElement, StreetListProps>(
                 : "Rue non géocodée précisément"}
               onClick={() => onSelectStreet(street)}
             >
+              <span
+                className={`street-signal ${streetTone(street)}`}
+                aria-hidden="true"
+              />
               <div className="street-main">
                 <strong>{street.label}</strong>
                 <div className="street-detail">
@@ -207,10 +260,13 @@ const StreetList = forwardRef<HTMLDivElement, StreetListProps>(
                   <span>{streetRestoreText(street)}</span>
                 </div>
               </div>
-              <div className="street-tags">
-                {street.outageTypes.map((type) => (
-                  <Tag key={type} type={type} />
-                ))}
+              <div className="street-meta">
+                <div className="street-tags">
+                  {street.outageTypes.map((type) => (
+                    <Tag key={type} type={type} />
+                  ))}
+                </div>
+                {mapped ? <ChevronRight size={17} aria-hidden="true" /> : null}
               </div>
             </button>
           );
@@ -219,6 +275,12 @@ const StreetList = forwardRef<HTMLDivElement, StreetListProps>(
     );
   },
 );
+
+function streetTone(street: Street): string {
+  if (street.outageTypes.some((type) => type.includes("HTA"))) return "hta";
+  if (street.outageTypes.some((type) => type.includes("BT"))) return "bt";
+  return "other";
+}
 
 interface TagProps {
   readonly type: string;

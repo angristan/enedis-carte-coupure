@@ -15,13 +15,13 @@ export const STREET_POINT_LAYER_ID = "outage-street-point";
 export const POLYGON_FILL_LAYER: LayerProps = {
   id: "outage-area-fill",
   type: "fill",
-  paint: { "fill-color": "#5db79e", "fill-opacity": 0.07 },
+  paint: { "fill-color": "#46bda3", "fill-opacity": 0.09 },
 };
 
 export const POLYGON_LINE_LAYER: LayerProps = {
   id: "outage-area-line",
   type: "line",
-  paint: { "line-color": "#277783", "line-width": 1.3, "line-opacity": 0.65 },
+  paint: { "line-color": "#087d70", "line-width": 1.4, "line-opacity": 0.7 },
 };
 
 export const STREET_CASING_LAYER: LayerProps = {
@@ -30,7 +30,7 @@ export const STREET_CASING_LAYER: LayerProps = {
   filter: ["==", ["geometry-type"], "LineString"],
   layout: { "line-cap": "round", "line-join": "round" },
   paint: {
-    "line-color": "#fffdf7",
+    "line-color": "#fffef8",
     "line-opacity": [
       "case",
       ["boolean", ["feature-state", "hovered"], false],
