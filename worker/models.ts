@@ -159,14 +159,6 @@ export const CommuneOutageCacheSchema = Schema.Struct({
   response: OutageResponseSchema,
 });
 
-export const OutageCacheSchema = Schema.Struct({
-  version: Schema.Literal(5),
-  refreshedAt: Schema.String,
-  freshUntil: Schema.String,
-  response: OutageResponseSchema,
-});
-
-export type OutageCacheEntry = Schema.Schema.Type<typeof OutageCacheSchema>;
 export type CommuneOutageCacheEntry = Schema.Schema.Type<
   typeof CommuneOutageCacheSchema
 >;

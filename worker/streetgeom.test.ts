@@ -23,7 +23,7 @@ describe("street geometry Overpass helpers", () => {
   it("builds an unrestricted lookup for an empty name list", () => {
     assert.strictEqual(
       buildStreetLookupQuery(bounds, []),
-      '[out:json][timeout:45];way["highway"]["name"](48.800000,2.200000,48.900000,2.400000);out tags geom;',
+      '[out:json][timeout:6];way["highway"]["name"](48.800000,2.200000,48.900000,2.400000);out tags geom;',
     );
   });
 

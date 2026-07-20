@@ -85,6 +85,7 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
           provider: "communes",
           operation: "communes.intersect",
           url,
+          dedupeKey: `viewport:${cacheKey}`,
           attributes: {
             "geo.south": cacheBounds.south,
             "geo.west": cacheBounds.west,

@@ -1,10 +1,5 @@
 import { Clock, Context, Effect, Layer } from "effect";
-import {
-  AllCommunesFailed,
-  errorMessage,
-  type RequestError,
-  type UpstreamError,
-} from "./errors.js";
+import { errorMessage, type RequestError } from "./errors.js";
 import {
   boundsForCommune,
   CommuneDirectory,
@@ -15,8 +10,6 @@ import type { Bounds } from "./geo.js";
 import {
   type Commune,
   CommuneOutageCacheSchema,
-  type EnedisQuery,
-  OutageCacheSchema,
   type OutageResponse,
 } from "./models.js";
 import {
@@ -25,6 +18,12 @@ import {
   responseCommunes,
 } from "./outages.js";
 import { BackgroundTasks, KVStore, WorkerConfig } from "./platform.js";
+import {
+  COMMUNE_PAGE_SIZE,
+  nextPageCursor,
+  pagePosition,
+  sessionTag,
+} from "./cursor.js";
 import { type CryptoError, sha256Hex } from "./util.js";
 
 export interface OutageResult {
@@ -49,16 +48,10 @@ type CommuneResult = {
 } | { readonly ok: false; readonly warning: string };
 
 export class OutageService extends Context.Service<OutageService, {
-  readonly single: (
-    query: EnedisQuery,
-    includeRaw: boolean,
-    geocode: boolean,
-  ) => Effect.Effect<OutageResult, ServiceError>;
   readonly viewport: (
     bounds: Bounds,
-    includeRaw: boolean,
-    geocode: boolean,
-    communeLimit?: number,
+    cursor: string | null,
+    sessionId: string,
   ) => Effect.Effect<OutageResult, ServiceError>;
 }>()("OutageService") {}
 
@@ -71,84 +64,31 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     const normalizer = yield* Normalizer;
     const background = yield* BackgroundTasks;
 
-    const store = Effect.fn("OutageService.store")(
-      function* (key: string, response: OutageResponse) {
-        if (config.outageCacheTtl <= 0) return;
-        const now = yield* Clock.currentTimeMillis;
-        yield* cache.set(key, {
-          version: 5,
-          refreshedAt: new Date(now).toISOString(),
-          freshUntil: new Date(now + config.outageCacheTtl * 1000)
-            .toISOString(),
-          response,
-        }, Math.max(config.outageCacheTtl, config.outageStaleTtl)).pipe(
-          Effect.catchTag("CacheError", () => Effect.void),
-        );
-      },
-    );
-
-    const freshSingle = Effect.fn("OutageService.freshSingle")(
-      function* (query: EnedisQuery, includeRaw: boolean, geocode: boolean) {
-        const raw = yield* enedis.fetch(query);
-        const normalized = yield* normalizer.normalize(raw, query, geocode);
-        return includeRaw ? { ...normalized, raw } : normalized;
-      },
-    );
-
-    const single = Effect.fn("OutageService.single")(
-      function* (query: EnedisQuery, includeRaw: boolean, geocode: boolean) {
-        const key = `outages:${yield* sha256Hex(
-          JSON.stringify({ query, includeRaw, geocode }),
-        )}`;
-        const refresh = freshSingle(query, includeRaw, geocode);
-        if (config.outageCacheTtl > 0) {
-          const entry = yield* cache.get(key, OutageCacheSchema, 60).pipe(
-            Effect.catchTag("CacheError", () => Effect.succeed(null)),
-          );
-          if (entry !== null) {
-            const now = yield* Clock.currentTimeMillis;
-            if (now < Date.parse(entry.freshUntil)) {
-              return {
-                response: entry.response,
-                cache: "HIT",
-                refreshedAt: entry.refreshedAt,
-                freshUntil: entry.freshUntil,
-              } satisfies Result;
-            }
-            yield* background.schedule(refresh.pipe(
-              Effect.flatMap((response) => store(key, response)),
-              Effect.catch(() => Effect.void),
-            ));
-            return {
-              response: entry.response,
-              cache: "STALE",
-              refreshedAt: entry.refreshedAt,
-              freshUntil: entry.freshUntil,
-            } satisfies Result;
-          }
-        }
-        const response = yield* refresh;
-        yield* store(key, response);
-        return { response, cache: "MISS" } satisfies Result;
-      },
-    );
-
     const refreshCommune = Effect.fn("OutageService.refreshCommune")(
       function* (
         key: string,
         commune: Commune,
-        geocode: boolean,
         fallbackBounds: Bounds,
       ) {
         const query = enedisQueryForCommune(commune);
         const raw = yield* enedis.fetch(query);
         let response = yield* normalizer.normalizeSet([{ raw, query }], {
-          geocode,
+          geocode: true,
           geometry: false,
         });
         const geometryBounds = boundsForCommune(commune, fallbackBounds);
-        if (geocode && geometryBounds !== undefined) {
-          response = yield* normalizer.attachGeometry(response, geometryBounds);
+        if (geometryBounds !== undefined) {
+          response = yield* normalizer.attachGeometry(response, geometryBounds).pipe(
+            Effect.catch((error) =>
+              Effect.succeed({
+                ...response,
+                warnings: [
+                  ...(response.warnings ?? []),
+                  `Street geometry unavailable: ${errorMessage(error)}`,
+                ],
+              })
+            ),
+          );
         }
         const publicCommune = responseCommunes([commune])[0];
         if (publicCommune !== undefined) {
@@ -171,11 +111,11 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     );
 
     const communeOutage = Effect.fn("OutageService.commune")(
-      function* (commune: Commune, geocode: boolean, fallbackBounds: Bounds) {
+      function* (commune: Commune, fallbackBounds: Bounds) {
         const key = `commune-outages:${yield* sha256Hex(
-          JSON.stringify({ code: commune.code, geocode }),
+          JSON.stringify({ code: commune.code, geocode: true }),
         )}`;
-        const refresh = refreshCommune(key, commune, geocode, fallbackBounds);
+        const refresh = refreshCommune(key, commune, fallbackBounds);
         if (config.outageCacheTtl > 0) {
           const entry = yield* cache.get(key, CommuneOutageCacheSchema, 60)
             .pipe(Effect.catchTag("CacheError", () => Effect.succeed(null)));
@@ -210,21 +150,31 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     );
 
     const viewport = Effect.fn("OutageService.viewport")(
-      function* (
-        bounds: Bounds,
-        includeRaw: boolean,
-        geocode: boolean,
-        communeLimit?: number,
-      ) {
-        const visible = yield* communes.forBounds(bounds, 200);
-        const selected = communesNearestCenter(visible, bounds).slice(
-          0,
-          communeLimit,
+      function* (bounds: Bounds, cursor: string | null, sessionId: string) {
+        const visible = communesNearestCenter(
+          yield* communes.forBounds(bounds, 200),
+          bounds,
+        );
+        const codes = visible.map((commune) => commune.code);
+        const now = yield* Clock.currentTimeMillis;
+        const tag = yield* sessionTag(sessionId);
+        const cursorContext = {
+          sessionTag: tag,
+          bounds,
+          communeCodes: codes,
+          now,
+          ttlSeconds: config.cursorTtl,
+          secret: config.cursorSigningSecret,
+        };
+        const position = yield* pagePosition(cursor, cursorContext);
+        const selected = visible.slice(
+          position.offset,
+          position.offset + COMMUNE_PAGE_SIZE,
         );
         const results = yield* Effect.forEach(
           selected,
           (commune): Effect.Effect<CommuneResult, CryptoError> =>
-            communeOutage(commune, geocode, bounds).pipe(
+            communeOutage(commune, bounds).pipe(
               Effect.catch((error) =>
                 error._tag === "CryptoError"
                   ? Effect.fail(error)
@@ -252,26 +202,22 @@ export const OutageServiceLive = Layer.effect(OutageService)(
           if ("warning" in item) warnings.push(item.warning);
           else successes.push(item);
         }
-        if (successes.length === 0 && warnings.length > 0) {
-          return yield* AllCommunesFailed.make({
-            warnings,
-            message: "all visible commune requests failed",
-          });
-        }
         const merged = mergeOutageResponses(
           successes.map((item) => item.response),
+        );
+        const nextOffset = position.offset + selected.length;
+        const nextCursor = yield* nextPageCursor(
+          nextOffset,
+          position.expiresAt,
+          cursorContext,
         );
         const response: OutageResponse = {
           ...merged,
           viewport: bounds,
           communes: responseCommunes(selected),
           communeTotal: visible.length,
-          warnings: [
-            ...warnings,
-            ...(includeRaw
-              ? ["raw Enedis payloads are omitted for viewport aggregation"]
-              : []),
-          ],
+          ...(nextCursor === undefined ? {} : { nextCursor }),
+          warnings,
         };
         return {
           response,
@@ -286,7 +232,7 @@ export const OutageServiceLive = Layer.effect(OutageService)(
       },
     );
 
-    return { single, viewport };
+    return { viewport };
   }),
 );
 

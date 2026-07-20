@@ -12,13 +12,22 @@ required.
 
 ```sh
 bun install --frozen-lockfile
+cat > .dev.vars <<'EOF'
+APP_ENV=development
+APP_ORIGIN=http://127.0.0.1:5173
+TURNSTILE_SITE_KEY=1x00000000000000000000AA
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+SESSION_SIGNING_SECRET=local-session-signing-secret-at-least-32-bytes
+CURSOR_SIGNING_SECRET=local-cursor-signing-secret-at-least-32-bytes
+EOF
 bun run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
+The shown site and secret keys are Cloudflare's official always-pass test keys. Never deploy them. Open
+[http://127.0.0.1:5173](http://127.0.0.1:5173).
 
-The Vite plugin starts the React frontend and Worker together in `workerd`. The `CACHE` binding uses local state
-under `.wrangler/state`.
+The Vite plugin starts the React frontend and Worker together in `workerd`. KV and the
+`UPSTREAM_COORDINATOR` Durable Object use local state under `.wrangler/state`.
 
 ## Commands
 
@@ -44,7 +53,13 @@ The committed defaults live in `wrangler.jsonc`:
 | `CACHE_PREFIX` | `enedis-carte-coupure` | Prefix applied to every KV key |
 | `COMMUNES_CACHE_TTL` | `7d` | Lifetime of snapped commune viewport entries |
 | `OUTAGE_CACHE_TTL` | `15m` | Fresh lifetime of normalized outage data |
-| `OUTAGE_CACHE_STALE_TTL` | `24h` | Retention window for stale outage data |
+| `OUTAGE_CACHE_STALE_TTL` | `7d` | Retention window for stale outage data |
+| `APP_ENV` | `production` | Enables strict production secret, action, and hostname validation |
+| `APP_ORIGIN` | production origin | Allowed origin for session creation |
+| `TURNSTILE_HOSTNAME` | production hostname | Required Siteverify hostname |
+| `TURNSTILE_SITE_KEY` | production widget | Public widget key |
+| `SESSION_TTL` | `30m` | Verified application session lifetime |
+| `CURSOR_TTL` | `10m` | Maximum pagination-sequence lifetime |
 
 Duration values accept `ms`, `s`, `m`, `h`, or `d`. Invalid values fall back to the defaults in the Worker.
 
@@ -70,7 +85,9 @@ Vitest and `@effect/vitest` run in the Node environment and cover:
 - typed KV decoding and malformed cache entries;
 - upstream JSON/status classification;
 - viewport parsing, snapping, containment, and commune geometry;
-- street-label normalization and line merging;
+- signed cursor integrity, session binding, and expiration;
+- secure session-cookie handling and upstream token-bucket calculations;
+- fixed-page aggregation, street-label normalization, and line merging;
 - public API response decoding and HTTP error mapping;
 - Worker transport error responses;
 - Railway redirect path/query preservation and open-redirect protection.
@@ -109,12 +126,15 @@ The main modules are intentionally separated by responsibility:
 
 - `shared/api.ts` defines the public response schemas consumed by both runtimes.
 - `worker/index.ts` is the thin routing, layer assembly, and `Effect.runPromise` boundary.
-- `worker/platform.ts` provides configuration, HTTP, KV, request context, and background-task services.
-- `worker/service.ts` owns outage caching and viewport orchestration.
+- `worker/platform.ts` provides configuration, coordinated HTTP, KV, rate-limit, request context, and background-task services.
+- `worker/session.ts`, `signing.ts`, and `cursor.ts` own verification, signed sessions, and pagination integrity.
+- `worker/upstream-coordinator.ts` enforces global provider budgets, concurrency, coalescing, deadlines, and body limits.
+- `worker/service.ts` owns outage caching and fixed viewport-page orchestration.
 - `worker/communes.ts`, `enedis.ts`, `geocode.ts`, and `streetgeom.ts` are provider services.
 - `worker/streetgeom-overpass.ts` and `streetgeom-geometry.ts` isolate query building and geometry math.
 - `worker/outages.ts` owns provider-backed enrichment; `outage-response.ts`, `outage-merging.ts`, `outage-values.ts`, `outage-polygons.ts`, and `street-normalization.ts` contain focused pure transformations.
 - `worker/errors.ts` defines the typed failure contract.
-- `frontend/src/api/client.ts` performs abortable requests and validates responses before React sees them.
+- `frontend/src/api/client.ts` performs session and cursor-page requests and validates responses before React sees them.
+- `frontend/src/domain/outagePages.ts` merges unique pages into one map response.
 
 See [Architecture and data flow](architecture.md) before changing cache keys or the commune composition model.

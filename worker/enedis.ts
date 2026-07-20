@@ -13,16 +13,6 @@ const DEFAULT_LONGITUDE = "2.347";
 const DEFAULT_LATITUDE = "48.859";
 const DEFAULT_DEPARTMENT = "75";
 
-export const DEFAULT_QUERY: EnedisQuery = {
-  insee: "75056",
-  type: "municipality",
-  adresse: "Paris",
-  CPVille: "Paris 75001",
-  name: "Paris",
-  district: "",
-  city: "Paris",
-};
-
 export class Enedis extends Context.Service<Enedis, {
   readonly fetch: (
     query: EnedisQuery,
@@ -47,6 +37,7 @@ export const EnedisLive = Layer.effect(Enedis)(Effect.gen(function* () {
         operation: "enedis.fetch",
         url: endpoint,
         attributes: { "enedis.insee": query.insee, "enedis.city": query.city },
+        dedupeKey: `commune:${query.insee}`,
         init: {
           headers: {
             Accept: "application/json, text/plain, */*",
@@ -60,31 +51,6 @@ export const EnedisLive = Layer.effect(Enedis)(Effect.gen(function* () {
 
   return { fetch: fetchPayload };
 }));
-
-export function queryFromValues(
-  values: Pick<URLSearchParams, "get" | "has">,
-): EnedisQuery {
-  const get = (name: string, fallback: string): string =>
-    values.has(name) ? values.get(name) ?? fallback : fallback;
-
-  const longitude = values.get("longitude") ?? values.get("long") ?? undefined;
-  const latitude = values.get("latitude") ?? values.get("lat") ?? undefined;
-  const department = values.get("department") ?? values.get("departement") ??
-    undefined;
-
-  return {
-    insee: get("insee", DEFAULT_QUERY.insee),
-    type: get("type", DEFAULT_QUERY.type),
-    adresse: get("adresse", DEFAULT_QUERY.adresse),
-    CPVille: get("CPVille", DEFAULT_QUERY.CPVille),
-    name: get("name", DEFAULT_QUERY.name),
-    district: get("district", DEFAULT_QUERY.district),
-    city: get("city", DEFAULT_QUERY.city),
-    ...(longitude === undefined ? {} : { longitude }),
-    ...(latitude === undefined ? {} : { latitude }),
-    ...(department === undefined ? {} : { department }),
-  };
-}
 
 export function resultURL(query: EnedisQuery): string {
   const url = new URL(ENEDIS_RESULT_PAGE);

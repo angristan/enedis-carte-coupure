@@ -10,7 +10,9 @@ streets, retrieves their OpenStreetMap geometry, and renders the complete result
 
 ## Highlights
 
-- Loads outages for every commune visible in the current viewport.
+- Loads visible communes in signed, fixed pages of six and merges them progressively.
+- Requires one managed Turnstile verification and a short-lived signed session.
+- Applies per-session rate limits plus global upstream budgets, coalescing, deadlines, and body limits.
 - Draws complete affected streets instead of isolated address points.
 - Distinguishes HTA incidents, planned HTA work, and BT incidents.
 - Keeps the map, street list, filters, and search synchronized.
@@ -25,15 +27,15 @@ streets, retrieves their OpenStreetMap geometry, and renders the complete result
 
 ```text
 Browser (React + Effect API decoder)
-  -> Cloudflare Worker (Effect service graph)
-       -> IGN API Carto intersects the viewport with commune contours
-       -> Enedis provides outage data for each commune
-       -> GeoPF / api-adresse geocodes affected streets
-       -> Overpass provides OpenStreetMap street geometry
+  -> Turnstile -> signed HttpOnly application session
+  -> Cloudflare Worker (strict viewport pages + signed cursors + rate limit)
+       -> UpstreamCoordinator Durable Object
+            -> provider token buckets, concurrency caps, coalescing, deadlines
+            -> IGN / Enedis / GeoPF / api-adresse / Overpass
        -> Workers KV caches Schema-validated results and indexes
 ```
 
-The Worker serves `/api/health`, `/api/outages`, and the built React application from one deployment. See
+The Worker serves `/api/health`, `/api/session`, `/api/outages`, and the built React application from one deployment. See
 [Architecture and data flow](docs/architecture.md) for the complete request and cache model.
 
 ## Quick start
@@ -42,11 +44,20 @@ Requires [Bun](https://bun.sh/) 1.3.9.
 
 ```sh
 bun install --frozen-lockfile
+cat > .dev.vars <<'EOF'
+APP_ENV=development
+APP_ORIGIN=http://127.0.0.1:5173
+TURNSTILE_SITE_KEY=1x00000000000000000000AA
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+SESSION_SIGNING_SECRET=local-session-signing-secret-at-least-32-bytes
+CURSOR_SIGNING_SECRET=local-cursor-signing-secret-at-least-32-bytes
+EOF
 bun run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The Cloudflare Vite plugin runs the frontend and Worker
-together in the local `workerd` runtime.
+`.dev.vars` is ignored by Git. These are Cloudflare's official always-pass test keys and must not be used in
+production. Open [http://127.0.0.1:5173](http://127.0.0.1:5173); the Cloudflare Vite plugin runs the frontend and
+Worker together in local `workerd`.
 
 Useful commands:
 

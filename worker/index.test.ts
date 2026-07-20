@@ -11,17 +11,23 @@ async function responseBody(response: Response): Promise<unknown> {
   return response.json();
 }
 
-describe("progressive commune limits", () => {
-  it("accepts positive integers and rejects invalid values", () => {
-    assert.strictEqual(testExports.parseCommuneLimit(null), undefined);
-    assert.strictEqual(testExports.parseCommuneLimit("12"), 12);
+describe("outage query parameters", () => {
+  it("accepts viewport cursors and rejects escape hatches", () => {
     assert.strictEqual(
-      testExports.parseCommuneLimit("0"),
-      "communeLimit must be a positive integer",
+      testExports.invalidOutageParameter(
+        new URLSearchParams("south=1&west=2&north=3&east=4&cursor=signed"),
+      ),
+      undefined,
     );
     assert.strictEqual(
-      testExports.parseCommuneLimit("1.5"),
-      "communeLimit must be a positive integer",
+      testExports.invalidOutageParameter(new URLSearchParams("raw=1")),
+      "unsupported parameter: raw",
+    );
+    assert.strictEqual(
+      testExports.invalidOutageParameter(
+        new URLSearchParams("south=1&south=2"),
+      ),
+      "duplicate parameter: south",
     );
   });
 });

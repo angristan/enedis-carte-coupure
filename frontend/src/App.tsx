@@ -9,13 +9,19 @@ import {
 import { RotateCw, Zap } from "lucide-react";
 import type { OutageResponse, Street } from "../../shared/api.js";
 import { viewportIsWithinLimits } from "../../shared/viewport.js";
-import { runOutageRequest } from "./api/client.js";
+import {
+  runOutageRequest,
+  runSessionStatusRequest,
+  runTurnstileVerification,
+} from "./api/client.js";
 import { SidePanel } from "./components/SidePanel.js";
+import { TurnstileGate } from "./components/TurnstileGate.js";
 import {
   buildStatusText,
   filterStreets,
   type StreetFilter,
 } from "./domain/streets.js";
+import { mergeOutagePages } from "./domain/outagePages.js";
 import { MapView, type MapViewHandle } from "./map/MapView.js";
 import {
   boundsContain,
@@ -31,8 +37,6 @@ interface LoadOptions {
   readonly force?: boolean;
 }
 
-const INITIAL_COMMUNE_LIMIT = 6;
-
 export function App() {
   const [data, setData] = useState<OutageResponse | null>(null);
   const [status, setStatus] = useState(
@@ -43,8 +47,12 @@ export function App() {
   const [query, setQuery] = useState("");
   const [activeKey, setActiveKey] = useState("");
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [sessionVerified, setSessionVerified] = useState(false);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
+  const sessionAbortRef = useRef<AbortController | null>(null);
   const dataRef = useLatest(data);
   const viewportRef = useLatest(viewport);
   const lastLoadedRequestRef = useRef<ResponseCoverage | null>(null);
@@ -54,7 +62,7 @@ export function App() {
 
   const loadViewport = useCallback(
     async (nextViewport: Viewport | null, options: LoadOptions = {}) => {
-      if (nextViewport === null) return;
+      if (nextViewport === null || !sessionVerified) return;
       const request = viewportRequest(nextViewport.bounds);
       if (
         nextViewport.zoom < MIN_VIEWPORT_ZOOM ||
@@ -95,18 +103,27 @@ export function App() {
 
       let latestData: OutageResponse | null = null;
       try {
-        let communeLimit = INITIAL_COMMUNE_LIMIT;
+        const pages = new Map<string, OutageResponse>();
+        const seenCursors = new Set<string>();
+        let cursor: string | undefined;
         while (abortRef.current === controller) {
-          const progressiveRequest = viewportRequest(
-            nextViewport.bounds,
-            communeLimit,
-          );
+          const pageId = cursor ?? "first";
+          if (seenCursors.has(pageId)) {
+            setStatus("Chargement partiel: pagination invalide.");
+            return;
+          }
+          seenCursors.add(pageId);
+
           const result = await runOutageRequest(
-            progressiveRequest,
+            viewportRequest(nextViewport.bounds, cursor),
             controller.signal,
           );
           if (abortRef.current !== controller) return;
           if (result.ok === false) {
+            if (
+              result.error._tag === "ApiStatusError" &&
+              result.error.status === 401
+            ) setSessionVerified(false);
             if (latestData === null) setData(null);
             setStatus(
               latestData === null
@@ -116,23 +133,21 @@ export function App() {
             return;
           }
 
-          latestData = result.data;
-          setData(result.data);
-          setStatus(buildStatusText(result.data));
+          pages.set(pageId, result.data);
+          const merged = mergeOutagePages([...pages.values()]);
+          if (merged === null) return;
+          latestData = merged;
+          setData(merged);
+          setStatus(buildStatusText(merged));
 
-          const loaded = result.data.communes?.length ?? 0;
-          const total = result.data.communeTotal ?? loaded;
-          if (loaded >= total) {
+          cursor = result.data.nextCursor;
+          if (cursor === undefined) {
             lastLoadedRequestRef.current = {
               bounds: request.bounds,
-              communes: result.data.communes ?? [],
+              communes: merged.communes ?? [],
             };
             return;
           }
-          communeLimit = Math.min(
-            total,
-            Math.max(communeLimit + INITIAL_COMMUNE_LIMIT, communeLimit * 2),
-          );
         }
       } catch {
         if (!controller.signal.aborted && abortRef.current === controller) {
@@ -151,8 +166,24 @@ export function App() {
         }
       }
     },
-    [dataRef],
+    [dataRef, sessionVerified],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    sessionAbortRef.current = controller;
+    void runSessionStatusRequest(controller.signal).then((result) => {
+      if (sessionAbortRef.current !== controller) return;
+      setSessionChecked(true);
+      if (result.ok) {
+        setSessionVerified(result.data.verified);
+        setTurnstileSiteKey(result.data.turnstileSiteKey);
+      } else {
+        setStatus(`Erreur: ${result.error.message}`);
+      }
+    });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     void loadViewport(viewport);
@@ -166,7 +197,10 @@ export function App() {
     selected?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeKey]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    sessionAbortRef.current?.abort();
+  }, []);
 
   const filteredStreets = useMemo(
     () => filterStreets(data?.streets ?? [], activeFilter, query),
@@ -186,6 +220,20 @@ export function App() {
   const handleRefresh = useCallback(() => {
     void loadViewport(viewportRef.current, { force: true });
   }, [loadViewport, viewportRef]);
+
+  const handleTurnstileToken = useCallback(async (token: string) => {
+    const controller = new AbortController();
+    sessionAbortRef.current?.abort();
+    sessionAbortRef.current = controller;
+    const result = await runTurnstileVerification(token, controller.signal);
+    if (sessionAbortRef.current !== controller || result.ok === false) {
+      if (result.ok === false) setStatus(`Erreur: ${result.error.message}`);
+      return false;
+    }
+    setSessionVerified(true);
+    setStatus("Chargement des coupures dans la vue...");
+    return true;
+  }, []);
 
   return (
     <main className="app-shell">
@@ -252,6 +300,14 @@ export function App() {
         onQueryChange={setQuery}
         onSelectStreet={handleListSelect}
       />
+      {sessionChecked && !sessionVerified && turnstileSiteKey.length > 0
+        ? (
+          <TurnstileGate
+            siteKey={turnstileSiteKey}
+            onToken={handleTurnstileToken}
+          />
+        )
+        : null}
     </main>
   );
 }

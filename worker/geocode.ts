@@ -49,6 +49,7 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
         operation: "geocode.lookup",
         url,
         attributes: { "geocode.endpoint": endpoint },
+        dedupeKey: `${endpoint}:${geocodeKey(query)}`,
         init: {
           headers: {
             Accept: "application/json",

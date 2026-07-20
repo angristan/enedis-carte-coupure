@@ -3,6 +3,8 @@ import {
   ApiErrorResponseSchema,
   type OutageResponse,
   OutageResponseSchema,
+  type SessionStatus,
+  SessionStatusSchema,
 } from "../../../shared/api.js";
 import type { ViewportRequest } from "../map/viewport.js";
 
@@ -36,28 +38,32 @@ export type OutageApiError =
   | ApiStatusError
   | ApiDecodeError;
 
-export interface OutageLoadSuccess {
+export interface ApiLoadSuccess<Value> {
   readonly ok: true;
-  readonly data: OutageResponse;
+  readonly data: Value;
 }
 
-export interface OutageLoadFailure {
+export interface ApiLoadFailure {
   readonly ok: false;
   readonly error: OutageApiError;
 }
 
-export type OutageLoadResult = OutageLoadSuccess | OutageLoadFailure;
+export type ApiLoadResult<Value> = ApiLoadSuccess<Value> | ApiLoadFailure;
+export type OutageLoadResult = ApiLoadResult<OutageResponse>;
 
+const VerificationResponseSchema = Schema.Struct({
+  verified: Schema.Literal(true),
+});
 const decodeApiError = Schema.decodeUnknownOption(ApiErrorResponseSchema);
 
-export const fetchOutages = Effect.fn("OutageApi.fetch")(
-  function* (request: ViewportRequest) {
+const requestJson = Effect.fn("OutageApi.requestJson")(
+  function* <A>(
+    url: string,
+    init: RequestInit,
+    schema: Schema.ConstraintDecoder<A, never>,
+  ) {
     const response = yield* Effect.tryPromise({
-      try: (signal) =>
-        fetch(`/api/outages?${request.params.toString()}`, {
-          signal,
-          headers: { accept: "application/json" },
-        }),
+      try: (signal) => fetch(url, { ...init, signal }),
       catch: (cause) =>
         ApiTransportError.make({
           message: "Impossible de contacter le service des coupures.",
@@ -89,15 +95,51 @@ export const fetchOutages = Effect.fn("OutageApi.fetch")(
         }),
     });
 
-    return yield* Schema.decodeUnknownEffect(OutageResponseSchema)(payload)
-      .pipe(
-        Effect.mapError((cause) =>
-          ApiDecodeError.make({
-            message: "La réponse du service des coupures est invalide.",
-            cause,
-          })
-        ),
-      );
+    return yield* Schema.decodeUnknownEffect(schema)(payload).pipe(
+      Effect.mapError((cause) =>
+        ApiDecodeError.make({
+          message: "La réponse du service des coupures est invalide.",
+          cause,
+        })
+      ),
+    );
+  },
+);
+
+export const fetchOutages = Effect.fn("OutageApi.fetch")(
+  function* (request: ViewportRequest) {
+    return yield* requestJson(
+      `/api/outages?${request.params.toString()}`,
+      { headers: { accept: "application/json" } },
+      OutageResponseSchema,
+    );
+  },
+);
+
+export const fetchSessionStatus = Effect.fn("OutageApi.sessionStatus")(
+  function* () {
+    return yield* requestJson(
+      "/api/session",
+      { headers: { accept: "application/json" } },
+      SessionStatusSchema,
+    );
+  },
+);
+
+export const verifyTurnstile = Effect.fn("OutageApi.verifyTurnstile")(
+  function* (turnstileToken: string) {
+    yield* requestJson(
+      "/api/session",
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ turnstileToken }),
+      },
+      VerificationResponseSchema,
+    );
   },
 );
 
@@ -105,11 +147,33 @@ export function runOutageRequest(
   request: ViewportRequest,
   signal: AbortSignal,
 ): Promise<OutageLoadResult> {
-  const result = fetchOutages(request).pipe(
-    Effect.match({
-      onFailure: (error): OutageLoadResult => ({ ok: false, error }),
-      onSuccess: (data): OutageLoadResult => ({ ok: true, data }),
-    }),
+  return runApiRequest(fetchOutages(request), signal);
+}
+
+export function runSessionStatusRequest(
+  signal: AbortSignal,
+): Promise<ApiLoadResult<SessionStatus>> {
+  return runApiRequest(fetchSessionStatus(), signal);
+}
+
+export function runTurnstileVerification(
+  token: string,
+  signal: AbortSignal,
+): Promise<ApiLoadResult<void>> {
+  return runApiRequest(verifyTurnstile(token), signal);
+}
+
+function runApiRequest<Value>(
+  effect: Effect.Effect<Value, OutageApiError>,
+  signal: AbortSignal,
+): Promise<ApiLoadResult<Value>> {
+  return Effect.runPromise(
+    effect.pipe(
+      Effect.match({
+        onFailure: (error): ApiLoadResult<Value> => ({ ok: false, error }),
+        onSuccess: (data): ApiLoadResult<Value> => ({ ok: true, data }),
+      }),
+    ),
+    { signal },
   );
-  return Effect.runPromise(result, { signal });
 }

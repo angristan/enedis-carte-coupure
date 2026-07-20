@@ -36,7 +36,7 @@ export function viewportFromMap(map: MapLibreMap): Viewport {
 
 export function viewportRequest(
   bounds: Bounds,
-  communeLimit?: number,
+  cursor?: string,
 ): ViewportRequest {
   const snapped = snapBounds(bounds, VIEWPORT_GRID);
   const params = new URLSearchParams();
@@ -44,9 +44,7 @@ export function viewportRequest(
   params.set("west", snapped.west.toFixed(4));
   params.set("north", snapped.north.toFixed(4));
   params.set("east", snapped.east.toFixed(4));
-  if (communeLimit !== undefined) {
-    params.set("communeLimit", String(communeLimit));
-  }
+  if (cursor !== undefined) params.set("cursor", cursor);
   return { bounds: snapped, params, key: params.toString() };
 }
 

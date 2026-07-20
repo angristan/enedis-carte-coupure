@@ -266,6 +266,7 @@ export interface OutageResponse {
   readonly viewport?: Bounds;
   readonly communes?: ReadonlyArray<PublicCommune>;
   readonly communeTotal?: number;
+  readonly nextCursor?: string;
   readonly commune?: PublicCommune;
   readonly warnings?: ReadonlyArray<string>;
   readonly raw?: unknown;
@@ -285,9 +286,28 @@ export const OutageResponseSchema = Schema.Struct({
   viewport: Schema.optionalKey(BoundsSchema),
   communes: Schema.optionalKey(Schema.Array(PublicCommuneSchema)),
   communeTotal: Schema.optionalKey(Schema.Number),
+  nextCursor: Schema.optionalKey(Schema.String),
   commune: Schema.optionalKey(PublicCommuneSchema),
   warnings: Schema.optionalKey(Schema.Array(Schema.String)),
   raw: Schema.optionalKey(Schema.Unknown),
+});
+
+export interface SessionStatus {
+  readonly verified: boolean;
+  readonly turnstileSiteKey: string;
+}
+
+export const SessionStatusSchema = Schema.Struct({
+  verified: Schema.Boolean,
+  turnstileSiteKey: Schema.String,
+});
+
+export interface SessionVerificationRequest {
+  readonly turnstileToken: string;
+}
+
+export const SessionVerificationRequestSchema = Schema.Struct({
+  turnstileToken: Schema.String,
 });
 
 export interface ApiErrorResponse {

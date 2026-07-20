@@ -3,7 +3,8 @@
   "name": "enedis-carte-coupure",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-07-07",
-  "workers_dev": true,
+  "workers_dev": false,
+  "preview_urls": false,
   "routes": [
     {
       "pattern": "enedis.stanislas.cloud",
@@ -16,16 +17,52 @@
   },
   "observability": {
     "enabled": true,
+    "head_sampling_rate": 0.05,
     "traces": {
-      "enabled": true
+      "enabled": true,
+      "head_sampling_rate": 0.02
     }
+  },
+  "limits": {
+    "cpu_ms": 1000,
+    "subrequests": 150
   },
   "vars": {
     "CACHE_PREFIX": "enedis-carte-coupure",
     "COMMUNES_CACHE_TTL": "7d",
     "OUTAGE_CACHE_TTL": "15m",
-    "OUTAGE_CACHE_STALE_TTL": "24h"
+    "OUTAGE_CACHE_STALE_TTL": "7d",
+    "APP_ENV": "production",
+    "APP_ORIGIN": "https://enedis.stanislas.cloud",
+    "TURNSTILE_HOSTNAME": "enedis.stanislas.cloud",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAD6CldUPZkyTMsi9",
+    "SESSION_TTL": "30m",
+    "CURSOR_TTL": "10m"
   },
+  "ratelimits": [
+    {
+      "name": "API_RATE_LIMITER",
+      "namespace_id": "731902",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "UPSTREAM_COORDINATOR",
+        "class_name": "UpstreamCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-upstream-coordinator",
+      "new_sqlite_classes": ["UpstreamCoordinator"]
+    }
+  ],
   "kv_namespaces": [
     {
       "binding": "CACHE",

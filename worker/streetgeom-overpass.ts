@@ -38,7 +38,7 @@ export function buildStreetLookupQuery(
   const nameKeys = uniqueSorted(rawNameKeys);
 
   if (nameKeys.length === 0) {
-    return `[out:json][timeout:45];way["highway"]["name"](${
+    return `[out:json][timeout:6];way["highway"]["name"](${
       overpassBBox(bounds)
     });out tags geom;`;
   }
@@ -61,7 +61,7 @@ export function buildStreetLookupQuery(
     }
   }
 
-  return `[out:json][timeout:45];(${queryParts.join("")});out tags geom;`;
+  return `[out:json][timeout:6];(${queryParts.join("")});out tags geom;`;
 }
 
 export function streetGeometriesFromPayload(

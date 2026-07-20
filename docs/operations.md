@@ -3,7 +3,7 @@
 ## Production endpoints
 
 - Primary: [https://enedis.stanislas.cloud](https://enedis.stanislas.cloud)
-- Workers fallback: [workers.dev deployment](https://enedis-carte-coupure.angristan.workers.dev)
+- Direct `workers.dev` and version preview URLs: disabled
 - Legacy Railway URL: `https://enedis-carte-coupure.up.railway.app`
 
 The primary hostname is a Cloudflare Workers Custom Domain. Cloudflare manages its DNS record and TLS
@@ -26,24 +26,35 @@ bun run deploy
 ```
 
 The deploy script rebuilds the project and publishes the generated configuration at
-`web/enedis_carte_coupure/wrangler.json`.
+`web/enedis_carte_coupure/wrangler.json`. Production requires the `TURNSTILE_SECRET_KEY`,
+`SESSION_SIGNING_SECRET`, and `CURSOR_SIGNING_SECRET` Worker secrets. Never reuse the session and cursor signing
+values.
 
 The Worker deployment includes:
 
 - the API entrypoint in `worker/index.ts`;
 - the React build as Workers Static Assets;
 - the `CACHE` Workers KV binding;
+- the `UPSTREAM_COORDINATOR` SQLite Durable Object;
+- the `API_RATE_LIMITER` binding at 60 requests per minute per verified session;
+- the managed pre-clearance Turnstile widget for `enedis.stanislas.cloud`;
 - the `enedis.stanislas.cloud` Custom Domain;
-- the `workers.dev` fallback route;
-- Workers observability and application traces.
+- sampled Workers observability and application traces.
+
+`workers_dev` and preview URLs are disabled. Cloudflare WAF rate limiting is not configured.
 
 Useful smoke checks:
 
 ```sh
 curl -fsS https://enedis.stanislas.cloud/api/health
-curl -fsS 'https://enedis.stanislas.cloud/api/outages?geocode=0'
+curl -fsS https://enedis.stanislas.cloud/api/session
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  'https://enedis.stanislas.cloud/api/outages?south=48.85&west=2.34&north=48.86&east=2.35'
 curl -I https://enedis.stanislas.cloud/
 ```
+
+The unauthenticated outage request should return `401`. Full outage smoke testing requires completing the
+Turnstile widget in a browser; do not automate around the challenge.
 
 ## Legacy Railway redirect
 
@@ -93,8 +104,7 @@ by clients and makes application rollback less predictable.
 
 The API exposes its application-level cache state through headers:
 
-- `X-App-Cache: HIT`, `MISS`, or `STALE` for single-query responses;
-- `X-App-Cache: COMMUNE` for viewport responses composed from commune facts;
+- `X-App-Cache: COMMUNE` for fixed viewport pages composed from commune facts;
 - `X-App-Cache-Commune-Hits`, `X-App-Cache-Commune-Stale`, and `X-App-Cache-Commune-Misses` for the
   per-commune breakdown of viewport responses;
 - `X-App-Cache-Refreshed-At` and `X-App-Cache-Fresh-Until` for cached response timing;
@@ -105,8 +115,7 @@ occasional repeated upstream work after a cold deployment is expected.
 
 ## Tracing
 
-Workers observability is enabled in `wrangler.jsonc`. Provider and cache adapters bridge their named Effect
-operations into native Cloudflare spans:
+Workers observability is sampled in `wrangler.jsonc`. Provider and cache adapters retain named Effect operations:
 
 - `cache.get` and `cache.put`
 - `communes.lookup`
@@ -115,7 +124,7 @@ operations into native Cloudflare spans:
 - `streetgeom.lookup`
 
 Useful bounded attributes include provider names, commune coordinates, street-name batch sizes, cache keys, and
-`http.response.status_code`. Cloudflare also creates platform spans for outgoing `fetch` and KV operations.
+`http.response.status_code`. Cloudflare also creates platform spans for Durable Object calls, outgoing `fetch`, and KV operations.
 
 Higher-level workflows remain named with `Effect.fn`, which improves Effect traces and failure stacks without
 creating an extra native span for every pure transformation. Unexpected causes are logged once at the Worker
@@ -125,9 +134,9 @@ boundary; public decode errors do not expose Schema diagnostics.
 
 ### A cold or broad viewport is slow
 
-Inspect the `enedis.fetch`, `geocode.lookup`, and `streetgeom.lookup` spans. A broad uncached view can wait on
-several commune requests even though concurrency is capped. Check the `X-App-Cache-Commune-*` response headers
-before changing concurrency.
+Inspect the `enedis.fetch`, `geocode.lookup`, and `streetgeom.lookup` operations. A cold page can wait on several
+commune requests even though concurrency is capped. Check `X-App-Cache-Commune-*` and page warnings before
+changing coordinator budgets.
 
 ### Nearby viewports repeat commune lookups
 

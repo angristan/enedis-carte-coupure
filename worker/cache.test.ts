@@ -1,4 +1,4 @@
-import { assert, describe, it, layer, vi } from "@effect/vitest";
+import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { MemoryKVLayer } from "./cache.js";
 import {
@@ -6,12 +6,20 @@ import {
   parseDuration,
   RawHttp,
   RawHttpLive,
-  RequestContext,
+  UpstreamCoordinatorClient,
 } from "./platform.js";
 import { sha256Hex } from "./util.js";
 
-const RequestTest = Layer.succeed(RequestContext)({ trace: {} });
-const HttpTest = RawHttpLive.pipe(Layer.provide(RequestTest));
+const CoordinatorTest = Layer.succeed(UpstreamCoordinatorClient)({
+  request: () =>
+    Effect.succeed({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: "not-json",
+    }),
+});
+const HttpTest = RawHttpLive.pipe(Layer.provide(CoordinatorTest));
 
 describe("worker boundaries", () => {
   layer(MemoryKVLayer)((it) => {
@@ -40,9 +48,6 @@ describe("worker boundaries", () => {
   layer(HttpTest)((it) => {
     it.effect("classifies malformed upstream JSON", () =>
       Effect.gen(function* () {
-        const restore = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-          new Response("not-json", { status: 200 }),
-        );
         const http = yield* RawHttp;
         const exit = yield* Effect.exit(
           http.json({
@@ -51,7 +56,6 @@ describe("worker boundaries", () => {
             url: "https://example.test",
           }, Schema.Struct({ ok: Schema.Boolean })),
         );
-        restore.mockRestore();
         assert.strictEqual(exit._tag, "Failure");
         if (exit._tag === "Failure") {
           assert.include(String(exit.cause), "UpstreamDecodeError");

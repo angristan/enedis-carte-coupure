@@ -1,10 +1,16 @@
 import { Cause, Effect, Layer, Schema } from "effect";
-import { ApiErrorResponseSchema, OutageResponseSchema } from "../shared/api.js";
+import {
+  ApiErrorResponseSchema,
+  OutageResponseSchema,
+  SessionStatusSchema,
+  SessionVerificationRequestSchema,
+} from "../shared/api.js";
 import { viewportIsWithinLimits } from "../shared/viewport.js";
 import { CommuneDirectoryLive } from "./communes.js";
-import { EnedisLive, queryFromValues } from "./enedis.js";
+import { EnedisLive } from "./enedis.js";
 import type { RequestError } from "./errors.js";
 import {
+  InvalidRequest,
   InvalidViewport,
   MethodNotAllowed,
   ViewportTooLarge,
@@ -19,6 +25,7 @@ import {
   kvStoreLayer,
   RawHttpLive,
   requestContextLayer,
+  upstreamCoordinatorLayer,
   WorkerConfig,
   type WorkerEnv,
 } from "./platform.js";
@@ -27,8 +34,11 @@ import {
   OutageService,
   OutageServiceLive,
 } from "./service.js";
+import { AccessControl, accessControlLayer } from "./session.js";
 import { StreetGeometryProviderLive } from "./streetgeom.js";
 import type { CryptoError } from "./util.js";
+
+export { UpstreamCoordinator } from "./upstream-coordinator.js";
 
 type HandlerError = RequestError | CryptoError;
 
@@ -41,8 +51,11 @@ function appLayer(env: WorkerEnv, context: ExecutionContext) {
     requestContextLayer(context),
     backgroundTasksLayer(context, run),
   );
-  const infrastructure = Layer.mergeAll(kvStoreLayer(env.CACHE), RawHttpLive)
-    .pipe(Layer.provideMerge(base));
+  const coordinator = upstreamCoordinatorLayer(env).pipe(
+    Layer.provideMerge(base),
+  );
+  const storage = kvStoreLayer(env.CACHE).pipe(Layer.provideMerge(coordinator));
+  const infrastructure = RawHttpLive.pipe(Layer.provideMerge(storage));
   const adapters = Layer.mergeAll(
     EnedisLive,
     CommuneDirectoryLive,
@@ -50,60 +63,83 @@ function appLayer(env: WorkerEnv, context: ExecutionContext) {
     StreetGeometryProviderLive,
   ).pipe(Layer.provideMerge(infrastructure));
   const normalization = NormalizerLive.pipe(Layer.provideMerge(adapters));
-  return OutageServiceLive.pipe(Layer.provide(normalization));
+  return Layer.mergeAll(
+    OutageServiceLive,
+    accessControlLayer(env),
+  ).pipe(Layer.provide(normalization));
 }
 
 const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
   const url = new URL(request.url);
   if (url.pathname === "/api/health") return json({ ok: true });
-  if (url.pathname !== "/api/outages") return null;
-  if (request.method !== "GET" && request.method !== "HEAD") {
+
+  const access = yield* AccessControl;
+  if (url.pathname === "/api/session") {
+    if (request.method === "GET") {
+      const status = yield* access.status(request);
+      const encoded = yield* Schema.encodeUnknownEffect(SessionStatusSchema)(
+        status,
+      ).pipe(Effect.orDie);
+      return json(encoded);
+    }
+    if (request.method === "POST") {
+      const payload = yield* decodeJsonRequest(
+        request,
+        SessionVerificationRequestSchema,
+      );
+      const created = yield* access.create(request, payload.turnstileToken);
+      const response = json({ verified: true });
+      response.headers.set("Set-Cookie", created.cookie);
+      return response;
+    }
     return yield* MethodNotAllowed.make({
       method: request.method,
       message: "method not allowed",
     });
   }
 
-  const service = yield* OutageService;
-  const parsed = parseBounds(url.searchParams);
-  const includeRaw = url.searchParams.get("raw") === "1";
-  const geocode = url.searchParams.get("geocode") !== "0";
-  const communeLimit = parseCommuneLimit(url.searchParams.get("communeLimit"));
-  if (typeof communeLimit === "string") {
-    return yield* InvalidViewport.make({ message: communeLimit });
+  if (url.pathname !== "/api/outages") return null;
+  if (request.method !== "GET") {
+    return yield* MethodNotAllowed.make({
+      method: request.method,
+      message: "method not allowed",
+    });
+  }
+  const invalidParameter = invalidOutageParameter(url.searchParams);
+  if (invalidParameter !== undefined) {
+    return yield* InvalidRequest.make({ message: invalidParameter });
   }
 
-  let result;
+  const parsed = parseBounds(url.searchParams);
   if (!parsed.hasBounds) {
-    result = yield* service.single(
-      queryFromValues(url.searchParams),
-      includeRaw,
-      geocode,
-    );
-  } else if ("error" in parsed) {
+    return yield* InvalidViewport.make({
+      message: "viewport bounds are required",
+    });
+  }
+  if ("error" in parsed) {
     return yield* InvalidViewport.make({ message: parsed.error });
-  } else if (!viewportIsWithinLimits(parsed.bounds)) {
+  }
+  if (!viewportIsWithinLimits(parsed.bounds)) {
     return yield* ViewportTooLarge.make({
       message: "viewport is too large; zoom in",
     });
-  } else {
-    result = yield* service.viewport(
-      parsed.bounds,
-      includeRaw,
-      geocode,
-      communeLimit,
-    );
   }
+
+  const session = yield* access.require(request);
+  yield* access.limit(session);
+  const service = yield* OutageService;
+  const result = yield* service.viewport(
+    parsed.bounds,
+    url.searchParams.get("cursor"),
+    session.id,
+  );
 
   const encoded = yield* Schema.encodeUnknownEffect(OutageResponseSchema)(
     result.response,
   ).pipe(Effect.orDie);
   const response = json(encoded);
   setCacheHeaders(response, result);
-
-  return request.method === "HEAD"
-    ? new Response(null, { status: response.status, headers: response.headers })
-    : response;
+  return response;
 });
 
 function setCacheHeaders(response: Response, result: OutageResult): void {
@@ -147,6 +183,21 @@ function errorResponse(error: HandlerError): Response {
       return apiError("TOO_MANY_COMMUNES", error.message, 400);
     case "MethodNotAllowed":
       return apiError("METHOD_NOT_ALLOWED", error.message, 405);
+    case "InvalidRequest":
+      return apiError("INVALID_REQUEST", error.message, 400);
+    case "InvalidCursor":
+      return apiError("INVALID_CURSOR", error.message, 400);
+    case "CursorExpired":
+      return apiError("CURSOR_EXPIRED", error.message, 410);
+    case "VerificationRequired":
+      return apiError("VERIFICATION_REQUIRED", error.message, 401);
+    case "VerificationFailed":
+      return apiError("VERIFICATION_FAILED", error.message, 403);
+    case "RateLimitExceeded": {
+      const response = apiError("RATE_LIMITED", error.message, 429);
+      response.headers.set("Retry-After", String(error.retryAfter));
+      return response;
+    }
     case "AllCommunesFailed":
       return apiError(
         "ENEDIS_FETCH_FAILED",
@@ -235,12 +286,37 @@ function apiError(
   return json(body, status);
 }
 
-function parseCommuneLimit(value: string | null): number | undefined | string {
-  if (value === null) return undefined;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0
-    ? parsed
-    : "communeLimit must be a positive integer";
+const OUTAGE_PARAMETERS = new Set([
+  "south",
+  "west",
+  "north",
+  "east",
+  "cursor",
+]);
+
+function invalidOutageParameter(values: URLSearchParams): string | undefined {
+  for (const key of values.keys()) {
+    if (!OUTAGE_PARAMETERS.has(key)) return `unsupported parameter: ${key}`;
+    if (values.getAll(key).length !== 1) return `duplicate parameter: ${key}`;
+  }
+  return undefined;
 }
 
-export const testExports = { errorResponse, parseCommuneLimit };
+const decodeJsonRequest = Effect.fn("Worker.decodeJsonRequest")(
+  function* <A>(
+    request: Request,
+    schema: Schema.ConstraintDecoder<A, never>,
+  ) {
+    const unknownJson = yield* Effect.tryPromise({
+      try: () => request.json(),
+      catch: () => InvalidRequest.make({ message: "invalid JSON request" }),
+    });
+    return yield* Schema.decodeUnknownEffect(schema)(unknownJson).pipe(
+      Effect.mapError(() =>
+        InvalidRequest.make({ message: "invalid JSON request" })
+      ),
+    );
+  },
+);
+
+export const testExports = { errorResponse, invalidOutageParameter };

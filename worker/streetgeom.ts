@@ -82,6 +82,7 @@ export const StreetGeometryProviderLive = Layer.effect(StreetGeometryProvider)(
           provider: "Overpass",
           operation: "streetgeom.lookup",
           url: endpoint,
+          dedupeKey: `${endpoint}:${boundsCacheKey(bounds)}:${nameKeys.join(",")}`,
           attributes: {
             "streetgeom.endpoint": endpoint,
             "streetgeom.names": nameKeys.length,

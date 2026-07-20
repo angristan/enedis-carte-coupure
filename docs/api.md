@@ -1,150 +1,135 @@
 # API reference
 
-The public API is available at `https://enedis.stanislas.cloud`. Local development uses
-`http://127.0.0.1:5173`.
-
-All JSON responses use `Content-Type: application/json; charset=utf-8` and `Cache-Control: no-store`. The response
-contract is defined once in `shared/api.ts`: the Worker encodes it and the browser decodes it with Effect Schema.
-Workers KV still caches application data internally; `no-store` prevents browsers and intermediate HTTP caches
-from hiding the application's freshness semantics.
+The API is served from `https://enedis.stanislas.cloud`. Successful and error responses are JSON with
+`Cache-Control: no-store`. The shared contract is defined in `shared/api.ts` and decoded by both the Worker and the
+browser with Effect Schema.
 
 ## `GET /api/health`
 
-Returns a lightweight liveness response:
+Unauthenticated liveness endpoint:
 
 ```json
 {"ok":true}
 ```
 
-Example:
+## Verified sessions
 
-```sh
-curl https://enedis.stanislas.cloud/api/health
+Outage data requires a short-lived session created after Cloudflare Turnstile verification. The session is stored
+in an HttpOnly cookie; clients should not attempt to parse it.
+
+### `GET /api/session`
+
+Reports whether the request already has a valid session. When verification is needed, it also returns the public
+Turnstile site key:
+
+```json
+{
+  "verified": false,
+  "turnstileSiteKey": "0x4AAAA..."
+}
 ```
+
+A verified request returns:
+
+```json
+{"verified":true}
+```
+
+### `POST /api/session`
+
+Verifies one Turnstile token:
+
+```json
+{"turnstileToken":"..."}
+```
+
+On success, the response is `{"verified":true}` and sets `__Host-outages_session` with `Path=/`, `HttpOnly`,
+`Secure`, `SameSite=Strict`, and a 30-minute lifetime. Production verification checks the Turnstile action and
+hostname. The managed widget also grants Cloudflare challenge clearance, so progressive page requests do not need
+additional Turnstile tokens.
+
+Requests with an unexpected `Origin` or invalid Turnstile result are rejected.
 
 ## `GET /api/outages`
 
-Returns normalized outages and affected streets. `HEAD` is also accepted.
-
-Without viewport parameters, the endpoint uses the default Paris query:
+Returns one fixed page containing at most six communes. A verified session and all four viewport bounds are
+required:
 
 ```text
-insee=75056
-type=municipality
-adresse=Paris
-CPVille=Paris 75001
-name=Paris
-city=Paris
+/api/outages?south=48.815&west=2.224&north=48.902&east=2.470
 ```
 
-```sh
-curl 'https://enedis.stanislas.cloud/api/outages'
+If `nextCursor` is present in the response, pass it unchanged with the same bounds:
+
+```text
+/api/outages?south=48.815&west=2.224&north=48.902&east=2.470&cursor=eyJ...
 ```
 
-### Viewport mode
+The cursor is opaque, signed, expires after 10 minutes, and is bound to the session, canonical viewport, ordered
+commune set, and page offset. It cannot be reused for another session or viewport. Page size is controlled by the
+server.
 
-Pass all four bounds:
-
-```sh
-curl 'https://enedis.stanislas.cloud/api/outages?south=48.815&west=2.224&north=48.902&east=2.470'
-```
-
-The equivalent `bbox` form uses `west,south,east,north` order:
-
-```sh
-curl 'https://enedis.stanislas.cloud/api/outages?bbox=2.224,48.815,2.470,48.902'
-```
-
-Viewport requests resolve every commune whose contour intersects the visible bounds and compose their normalized
-results. A viewport is rejected when it exceeds the configured area/span limits or resolves to more than 200
-communes.
-
-### Query parameters
+### Accepted query parameters
 
 | Parameter | Meaning |
 | --- | --- |
-| `south`, `west`, `north`, `east` | Viewport bounds; all four are required together |
-| `bbox` | Alternative viewport in `west,south,east,north` order |
-| `communeLimit` | In viewport mode, load only the nearest N communes for progressive rendering |
-| `insee` | Commune INSEE code for single-query mode |
-| `type` | Enedis location type, normally `municipality` |
-| `adresse` | Address or commune label sent to Enedis |
-| `CPVille` | Postal code and city label sent to Enedis |
-| `name` | Commune name sent to Enedis |
-| `district` | Optional district value |
-| `city` | City used when normalizing street labels |
-| `longitude` or `long` | Optional longitude sent to the Enedis result-page context |
-| `latitude` or `lat` | Optional latitude sent to the Enedis result-page context |
-| `department` or `departement` | Optional department code |
-| `geocode=0` | Skip street geocoding and OSM geometry |
-| `raw=1` | Include the raw Enedis payload in single-query mode |
+| `south`, `west`, `north`, `east` | Required viewport bounds |
+| `cursor` | Optional opaque cursor returned by the previous page |
 
-Raw payloads are intentionally omitted from composed viewport responses; the response includes a warning when
-`raw=1` is requested in viewport mode.
+Unknown parameters are rejected. The API does not expose single-commune mode, raw upstream payloads, alternate
+`bbox` syntax, geocoding controls, or caller-selected commune limits. Only `GET` is accepted.
 
-### Response shape
-
-The response includes:
+### Response fields
 
 | Field | Description |
 | --- | --- |
-| `updatedAt` | Time at which the normalized response was produced |
+| `updatedAt` | Latest normalization time represented by the page |
 | `source` | Upstream endpoint metadata |
-| `query` | Primary Enedis query |
-| `queries` | All Enedis queries when several communes were composed |
-| `viewport` | Requested bounds in viewport mode |
-| `communes` | Loaded commune names, codes, centers, and contours |
-| `communeTotal` | Total number of communes intersecting the viewport before `communeLimit` |
-| `polygon` | Enedis outage polygons, possibly combined as a feature collection |
-| `stats` | Incident, street, geocoding, geometry, and Enedis counters |
-| `outages` | Normalized incident records |
-| `streets` | Deduplicated affected streets with geocoding and geometry results |
-| `warnings` | Per-commune failures or non-fatal behavior notes |
+| `query`, `queries` | Enedis commune queries represented by the page |
+| `viewport` | Canonical requested bounds |
+| `communes` | This page's communes and contours, at most six |
+| `communeTotal` | Total intersecting communes across all pages |
+| `nextCursor` | Opaque next-page cursor; absent on the final page |
+| `polygon` | Outage polygons for this page |
+| `stats` | Page-local incident, street, geocoding, and geometry totals |
+| `outages` | Normalized page-local incidents |
+| `streets` | Deduplicated page-local affected streets |
+| `warnings` | Non-fatal upstream, budget, or commune failures |
 | `recap`, `crises` | Additional Enedis summary data when present |
-| `raw` | Raw Enedis payload in single-query mode when requested |
 
-Street records retain their display label, normalized name, city, postcode, incident types, dates, affected-home
-count, geocoding result, and OSM line geometry.
+The browser stores pages by cursor identity and recomputes the merged map state. Retrying a page therefore does not
+double-count outages, streets, or statistics.
+
+A provider or budget failure is isolated where possible. Fresh or retained stale commune data is preferred;
+otherwise the page remains successful with warnings so pagination can continue.
 
 ### Cache headers
 
-The Worker reports application cache behavior without exposing it in the UI:
-
 | Header | Meaning |
 | --- | --- |
-| `X-App-Cache: HIT` | A fresh single-query response was served from KV |
-| `X-App-Cache: MISS` | The response was fetched and stored |
-| `X-App-Cache: STALE` | A retained response was served while a background refresh started |
-| `X-App-Cache: COMMUNE` | A viewport response was composed from per-commune facts |
-| `X-App-Cache-Commune-Hits` | Number of communes served from fresh cache entries |
-| `X-App-Cache-Commune-Stale` | Number of communes served stale while refreshing in the background |
-| `X-App-Cache-Commune-Misses` | Number of communes fetched synchronously, including failed fetches |
-| `X-App-Cache-Refreshed-At` | Time the cached response was produced |
-| `X-App-Cache-Fresh-Until` | End of the response's fresh period |
-| `X-App-Cache-Refresh: background` | A stale response triggered background refresh work |
+| `X-App-Cache: COMMUNE` | The page was composed from per-commune facts |
+| `X-App-Cache-Commune-Hits` | Fresh commune cache hits |
+| `X-App-Cache-Commune-Stale` | Retained stale facts served while refreshing |
+| `X-App-Cache-Commune-Misses` | Synchronous refresh attempts, including failures |
 
 ### Errors
-
-Errors use this shape:
 
 ```json
 {
   "error": "INVALID_VIEWPORT",
-  "message": "missing north"
+  "message": "viewport bounds are required"
 }
 ```
 
-Common statuses:
-
 | Status | Code or condition |
 | --- | --- |
-| `400` | Invalid, partial, or oversized viewport |
-| `405` | Method other than `GET` or `HEAD` on `/api/outages` |
-| `502` | Every required commune failed, an upstream rejected the request, or an upstream payload was invalid |
-| `500` | Cache-key generation or an unexpected Worker defect failed |
+| `400` | `INVALID_REQUEST`, `INVALID_VIEWPORT`, `VIEWPORT_TOO_LARGE`, `TOO_MANY_COMMUNES`, or `INVALID_CURSOR` |
+| `401` | `VERIFICATION_REQUIRED` |
+| `403` | `VERIFICATION_FAILED` |
+| `405` | `METHOD_NOT_ALLOWED` |
+| `410` | `CURSOR_EXPIRED`; restart pagination from the first page |
+| `429` | `RATE_LIMITED`, with `Retry-After` |
+| `502` | A non-degradable upstream transport, status, or decode failure |
+| `500` | Internal cryptographic or Worker failure |
 
-Typed upstream failures use `UPSTREAM_TRANSPORT_ERROR`, `UPSTREAM_STATUS_ERROR`, or `UPSTREAM_DECODE_ERROR`.
-Decode responses intentionally omit raw Schema diagnostics.
-
-When only some commune requests fail, the API returns `200` with successful results and records the failures in
-`warnings`.
+The Worker rate limit is keyed by the verified random session ID, not caller-controlled input.

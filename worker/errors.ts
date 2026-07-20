@@ -22,6 +22,39 @@ export class MethodNotAllowed
     message: Schema.String,
   }) {}
 
+export class InvalidRequest
+  extends Schema.TaggedErrorClass<InvalidRequest>()("InvalidRequest", {
+    message: Schema.String,
+  }) {}
+
+export class InvalidCursor
+  extends Schema.TaggedErrorClass<InvalidCursor>()("InvalidCursor", {
+    message: Schema.String,
+  }) {}
+
+export class CursorExpired
+  extends Schema.TaggedErrorClass<CursorExpired>()("CursorExpired", {
+    message: Schema.String,
+  }) {}
+
+export class VerificationRequired
+  extends Schema.TaggedErrorClass<VerificationRequired>()(
+    "VerificationRequired",
+    { message: Schema.String },
+  ) {}
+
+export class VerificationFailed
+  extends Schema.TaggedErrorClass<VerificationFailed>()(
+    "VerificationFailed",
+    { message: Schema.String },
+  ) {}
+
+export class RateLimitExceeded
+  extends Schema.TaggedErrorClass<RateLimitExceeded>()("RateLimitExceeded", {
+    retryAfter: Schema.Number,
+    message: Schema.String,
+  }) {}
+
 export class UpstreamTransportError
   extends Schema.TaggedErrorClass<UpstreamTransportError>()(
     "UpstreamTransportError",
@@ -73,6 +106,12 @@ export type RequestError =
   | ViewportTooLarge
   | TooManyCommunes
   | MethodNotAllowed
+  | InvalidRequest
+  | InvalidCursor
+  | CursorExpired
+  | VerificationRequired
+  | VerificationFailed
+  | RateLimitExceeded
   | AllCommunesFailed
   | UpstreamError;
 
