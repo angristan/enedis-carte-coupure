@@ -14,7 +14,7 @@ Cloudflare Worker
   |  thin Request/Response boundary
   v
 OutageService
-  +-- CommuneDirectory ------> geo.api.gouv.fr
+  +-- CommuneDirectory ------> IGN API Carto
   +-- Enedis ----------------> enedis.fr
   +-- Normalizer
   |     +-- Geocoder --------> GeoPF / api-adresse
@@ -54,15 +54,16 @@ The browser sends the visible map bounds to `/api/outages`.
 
 1. The Worker validates the request method and viewport.
 2. `CommuneDirectory` checks the snapped viewport cache.
-3. On a miss, it samples nine points and resolves them through `geo.api.gouv.fr`, with at most eight requests in
-   flight.
-4. The Worker deduplicates communes and rejects viewports crossing more than 30 communes.
-5. `OutageService` loads each commune's normalized outage fact, with at most six communes in flight.
-6. `Enedis` fetches and Schema-decodes the public outage payload.
-7. `Normalizer` deduplicates incidents and streets, then geocodes streets with at most four lookups in flight.
-8. `StreetGeometryProvider` loads missing OSM street geometry from a bounded Overpass query.
-9. The Worker caches each commune fact and composes the viewport response.
-10. The response is encoded through `OutageResponseSchema` before it leaves the Worker.
+3. On a miss, it sends the viewport polygon to IGN API Carto, which returns every intersecting commune contour.
+4. The Worker deduplicates communes and rejects viewports crossing more than 200 communes.
+5. The browser first requests the six communes nearest the viewport center, then doubles the cumulative limit until
+   `communeTotal` is reached. Each successful response immediately updates the map and list.
+6. `OutageService` loads the selected communes' normalized outage facts, with at most six communes in flight.
+7. `Enedis` fetches and Schema-decodes the public outage payload.
+8. `Normalizer` deduplicates incidents and streets, then geocodes streets with at most four lookups in flight.
+9. `StreetGeometryProvider` loads missing OSM street geometry from a bounded Overpass query.
+10. The Worker caches each commune fact and composes the viewport response.
+11. The response is encoded through `OutageResponseSchema` before it leaves the Worker.
 
 A failed commune becomes a warning when another commune succeeded. The request returns `502` only when every
 required commune failed.
@@ -87,8 +88,9 @@ The Worker stores snapped viewport results under `communes:*`. A shifted viewpor
 reuses that entry.
 
 Responses also include commune contours. The browser samples the new map bounds against those contours and keeps
-the current response when it remains covered. It also avoids starting a second request when the active request
-already contains the new bounds.
+the current response when it remains covered. Coverage reuse starts only after all `communeTotal` communes have
+loaded. Moving the map aborts the current progressive sequence, and a second request is avoided while the active
+request already contains the new bounds.
 
 ## Geocoding and street geometry
 

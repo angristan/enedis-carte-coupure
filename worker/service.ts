@@ -58,6 +58,7 @@ export class OutageService extends Context.Service<OutageService, {
     bounds: Bounds,
     includeRaw: boolean,
     geocode: boolean,
+    communeLimit?: number,
   ) => Effect.Effect<OutageResult, ServiceError>;
 }>()("OutageService") {}
 
@@ -209,10 +210,19 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     );
 
     const viewport = Effect.fn("OutageService.viewport")(
-      function* (bounds: Bounds, includeRaw: boolean, geocode: boolean) {
-        const visible = yield* communes.forBounds(bounds, 30);
+      function* (
+        bounds: Bounds,
+        includeRaw: boolean,
+        geocode: boolean,
+        communeLimit?: number,
+      ) {
+        const visible = yield* communes.forBounds(bounds, 200);
+        const selected = communesNearestCenter(visible, bounds).slice(
+          0,
+          communeLimit,
+        );
         const results = yield* Effect.forEach(
-          visible,
+          selected,
           (commune): Effect.Effect<CommuneResult, CryptoError> =>
             communeOutage(commune, geocode, bounds).pipe(
               Effect.catch((error) =>
@@ -254,7 +264,8 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         const response: OutageResponse = {
           ...merged,
           viewport: bounds,
-          communes: responseCommunes(visible),
+          communes: responseCommunes(selected),
+          communeTotal: visible.length,
           warnings: [
             ...warnings,
             ...(includeRaw
@@ -278,3 +289,29 @@ export const OutageServiceLive = Layer.effect(OutageService)(
     return { single, viewport };
   }),
 );
+
+function communesNearestCenter(
+  communes: ReadonlyArray<Commune>,
+  bounds: Bounds,
+): Array<Commune> {
+  const targetLat = (bounds.south + bounds.north) / 2;
+  const targetLng = (bounds.west + bounds.east) / 2;
+
+  return [...communes].sort((left, right) => {
+    const distance = communeDistance(left, targetLat, targetLng) -
+      communeDistance(right, targetLat, targetLng);
+    return distance === 0 ? left.code.localeCompare(right.code) : distance;
+  });
+}
+
+function communeDistance(
+  commune: Commune,
+  targetLat: number,
+  targetLng: number,
+): number {
+  const coordinates = commune.center?.coordinates;
+  if (coordinates === undefined) return Number.POSITIVE_INFINITY;
+  const lat = coordinates[1] - targetLat;
+  const lng = coordinates[0] - targetLng;
+  return lat * lat + lng * lng;
+}

@@ -68,6 +68,10 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
   const parsed = parseBounds(url.searchParams);
   const includeRaw = url.searchParams.get("raw") === "1";
   const geocode = url.searchParams.get("geocode") !== "0";
+  const communeLimit = parseCommuneLimit(url.searchParams.get("communeLimit"));
+  if (typeof communeLimit === "string") {
+    return yield* InvalidViewport.make({ message: communeLimit });
+  }
 
   let result;
   if (!parsed.hasBounds) {
@@ -83,7 +87,12 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
       message: "viewport is too large; zoom in",
     });
   } else {
-    result = yield* service.viewport(parsed.bounds, includeRaw, geocode);
+    result = yield* service.viewport(
+      parsed.bounds,
+      includeRaw,
+      geocode,
+      communeLimit,
+    );
   }
 
   const encoded = yield* Schema.encodeUnknownEffect(OutageResponseSchema)(
@@ -226,4 +235,12 @@ function apiError(
   return json(body, status);
 }
 
-export const testExports = { errorResponse };
+function parseCommuneLimit(value: string | null): number | undefined | string {
+  if (value === null) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0
+    ? parsed
+    : "communeLimit must be a positive integer";
+}
+
+export const testExports = { errorResponse, parseCommuneLimit };

@@ -31,6 +31,8 @@ interface LoadOptions {
   readonly force?: boolean;
 }
 
+const INITIAL_COMMUNE_LIMIT = 6;
+
 export function App() {
   const [data, setData] = useState<OutageResponse | null>(null);
   const [status, setStatus] = useState(
@@ -91,25 +93,54 @@ export function App() {
       setLoading(true);
       setStatus("Chargement des coupures dans la vue...");
 
+      let latestData: OutageResponse | null = null;
       try {
-        const result = await runOutageRequest(request, controller.signal);
-        if (abortRef.current !== controller) return;
-        if (result.ok === false) {
-          setData(null);
-          setStatus(`Erreur: ${result.error.message}`);
-          return;
+        let communeLimit = INITIAL_COMMUNE_LIMIT;
+        while (abortRef.current === controller) {
+          const progressiveRequest = viewportRequest(
+            nextViewport.bounds,
+            communeLimit,
+          );
+          const result = await runOutageRequest(
+            progressiveRequest,
+            controller.signal,
+          );
+          if (abortRef.current !== controller) return;
+          if (result.ok === false) {
+            if (latestData === null) setData(null);
+            setStatus(
+              latestData === null
+                ? `Erreur: ${result.error.message}`
+                : `Chargement partiel: ${result.error.message}`,
+            );
+            return;
+          }
+
+          latestData = result.data;
+          setData(result.data);
+          setStatus(buildStatusText(result.data));
+
+          const loaded = result.data.communes?.length ?? 0;
+          const total = result.data.communeTotal ?? loaded;
+          if (loaded >= total) {
+            lastLoadedRequestRef.current = {
+              bounds: request.bounds,
+              communes: result.data.communes ?? [],
+            };
+            return;
+          }
+          communeLimit = Math.min(
+            total,
+            Math.max(communeLimit + INITIAL_COMMUNE_LIMIT, communeLimit * 2),
+          );
         }
-        setData(result.data);
-        setStatus(buildStatusText(result.data));
-        lastLoadedRequestRef.current = {
-          bounds: request.bounds,
-          communes: result.data.communes ?? [],
-        };
       } catch {
         if (!controller.signal.aborted && abortRef.current === controller) {
-          setData(null);
+          if (latestData === null) setData(null);
           setStatus(
-            "Erreur: la requête a été interrompue de façon inattendue.",
+            latestData === null
+              ? "Erreur: la requête a été interrompue de façon inattendue."
+              : "Chargement partiel: la requête a été interrompue de façon inattendue.",
           );
         }
       } finally {

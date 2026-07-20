@@ -49,6 +49,7 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
     ref,
   ) {
     const communeCount = data?.communes?.length ?? data?.queries?.length;
+    const communeTotal = data?.communeTotal ?? communeCount;
     const searchInputRef = useRef<HTMLInputElement>(null);
     const allStreets = data?.streets ?? [];
     const filterCounts: Record<StreetFilter, number> = {
@@ -115,7 +116,10 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
           <Insight
             icon={MapPinned}
             label="Zone analysée"
-            value={`${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
+            value={communeCount !== undefined && communeTotal !== undefined &&
+                communeCount < communeTotal
+              ? `${formatNumber(communeCount)} / ${formatNumber(communeTotal)} communes`
+              : `${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
           />
           <Insight
             icon={Clock3}

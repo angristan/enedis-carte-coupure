@@ -34,13 +34,19 @@ export function viewportFromMap(map: MapLibreMap): Viewport {
   };
 }
 
-export function viewportRequest(bounds: Bounds): ViewportRequest {
+export function viewportRequest(
+  bounds: Bounds,
+  communeLimit?: number,
+): ViewportRequest {
   const snapped = snapBounds(bounds, VIEWPORT_GRID);
   const params = new URLSearchParams();
   params.set("south", snapped.south.toFixed(4));
   params.set("west", snapped.west.toFixed(4));
   params.set("north", snapped.north.toFixed(4));
   params.set("east", snapped.east.toFixed(4));
+  if (communeLimit !== undefined) {
+    params.set("communeLimit", String(communeLimit));
+  }
   return { bounds: snapped, params, key: params.toString() };
 }
 

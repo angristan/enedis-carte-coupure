@@ -265,6 +265,7 @@ export interface OutageResponse {
   readonly crises?: unknown;
   readonly viewport?: Bounds;
   readonly communes?: ReadonlyArray<PublicCommune>;
+  readonly communeTotal?: number;
   readonly commune?: PublicCommune;
   readonly warnings?: ReadonlyArray<string>;
   readonly raw?: unknown;
@@ -283,6 +284,7 @@ export const OutageResponseSchema = Schema.Struct({
   crises: Schema.optionalKey(Schema.Unknown),
   viewport: Schema.optionalKey(BoundsSchema),
   communes: Schema.optionalKey(Schema.Array(PublicCommuneSchema)),
+  communeTotal: Schema.optionalKey(Schema.Number),
   commune: Schema.optionalKey(PublicCommuneSchema),
   warnings: Schema.optionalKey(Schema.Array(Schema.String)),
   raw: Schema.optionalKey(Schema.Unknown),

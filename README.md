@@ -26,7 +26,7 @@ streets, retrieves their OpenStreetMap geometry, and renders the complete result
 ```text
 Browser (React + Effect API decoder)
   -> Cloudflare Worker (Effect service graph)
-       -> geo.api.gouv.fr finds the visible communes
+       -> IGN API Carto intersects the viewport with commune contours
        -> Enedis provides outage data for each commune
        -> GeoPF / api-adresse geocodes affected streets
        -> Overpass provides OpenStreetMap street geometry

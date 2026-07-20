@@ -55,8 +55,9 @@ The equivalent `bbox` form uses `west,south,east,north` order:
 curl 'https://enedis.stanislas.cloud/api/outages?bbox=2.224,48.815,2.470,48.902'
 ```
 
-Viewport requests resolve the visible communes and compose their normalized results. A viewport is rejected when
-it exceeds the configured area/span limits or resolves to more than 30 communes.
+Viewport requests resolve every commune whose contour intersects the visible bounds and compose their normalized
+results. A viewport is rejected when it exceeds the configured area/span limits or resolves to more than 200
+communes.
 
 ### Query parameters
 
@@ -64,6 +65,7 @@ it exceeds the configured area/span limits or resolves to more than 30 communes.
 | --- | --- |
 | `south`, `west`, `north`, `east` | Viewport bounds; all four are required together |
 | `bbox` | Alternative viewport in `west,south,east,north` order |
+| `communeLimit` | In viewport mode, load only the nearest N communes for progressive rendering |
 | `insee` | Commune INSEE code for single-query mode |
 | `type` | Enedis location type, normally `municipality` |
 | `adresse` | Address or commune label sent to Enedis |
@@ -91,7 +93,8 @@ The response includes:
 | `query` | Primary Enedis query |
 | `queries` | All Enedis queries when several communes were composed |
 | `viewport` | Requested bounds in viewport mode |
-| `communes` | Resolved commune names, codes, centers, and contours |
+| `communes` | Loaded commune names, codes, centers, and contours |
+| `communeTotal` | Total number of communes intersecting the viewport before `communeLimit` |
 | `polygon` | Enedis outage polygons, possibly combined as a feature collection |
 | `stats` | Incident, street, geocoding, geometry, and Enedis counters |
 | `outages` | Normalized incident records |

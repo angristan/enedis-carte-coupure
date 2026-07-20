@@ -59,8 +59,11 @@ export function streetRestoreText(street: Street): string {
 
 export function buildStatusText(payload: OutageResponse): string {
   const communeCount = payload.communes?.length ?? payload.queries?.length ?? 0;
+  const communeTotal = payload.communeTotal ?? communeCount;
   const suffix = communeCount > 1
-    ? ` dans ${formatNumber(communeCount)} communes`
+    ? communeCount < communeTotal
+      ? ` dans ${formatNumber(communeCount)} communes sur ${formatNumber(communeTotal)}`
+      : ` dans ${formatNumber(communeCount)} communes`
     : "";
   if (payload.stats.streets === 0) {
     return `Aucune rue touchée remontée par Enedis dans les communes visibles${suffix}.`;

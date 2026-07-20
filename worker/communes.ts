@@ -4,39 +4,40 @@ import {
   type Bounds,
   boundsCacheKey,
   boundsFromGeoJSONGeometry,
-  center,
   padded,
-  type Position,
   snapped,
 } from "./geo.js";
 import { type Commune, CommuneSchema, type EnedisQuery } from "./models.js";
 import { KVStore, RawHttp, WorkerConfig } from "./platform.js";
 
-export const COMMUNES_ENDPOINT = "https://geo.api.gouv.fr/communes";
-const LOOKUP_CONCURRENCY = 8;
-const VIEWPORT_GRID = 0.02;
+export const COMMUNES_ENDPOINT =
+  "https://apicarto.ign.fr/api/limites-administratives/commune";
+const VIEWPORT_GRID = 0.0001;
 const GEOMETRY_PADDING_RATIO = 0.04;
+const API_CARTO_MAXIMUM = 500;
 
-const ApiCommuneSchema = Schema.Struct({
-  nom: Schema.String,
-  code: Schema.String,
-  codesPostaux: Schema.optionalKey(Schema.Array(Schema.String)),
-  centre: Schema.optionalKey(
-    Schema.Struct({
-      type: Schema.optionalKey(Schema.String),
-      coordinates: Schema.Tuple([Schema.Number, Schema.Number]),
-    }),
-  ),
-  contour: Schema.optionalKey(
-    Schema.NullOr(
-      Schema.Struct({ type: Schema.String, coordinates: Schema.Unknown }),
-    ),
-  ),
+const ApiCommuneGeometrySchema = Schema.Struct({
+  type: Schema.String,
+  coordinates: Schema.Unknown,
 });
-const ApiCommunesSchema = Schema.Array(ApiCommuneSchema);
+
+const ApiCommuneFeatureSchema = Schema.Struct({
+  type: Schema.Literal("Feature"),
+  geometry: Schema.NullOr(ApiCommuneGeometrySchema),
+  properties: Schema.Struct({
+    nom_com: Schema.String,
+    insee_com: Schema.String,
+    code_postal: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
+});
+
+const ApiCommunesSchema = Schema.Struct({
+  type: Schema.Literal("FeatureCollection"),
+  features: Schema.Array(ApiCommuneFeatureSchema),
+});
 
 const CachedCommunesSchema = Schema.Struct({
-  version: Schema.Literal(3),
+  version: Schema.Literal(4),
   updatedAt: Schema.String,
   bounds: Schema.Struct({
     south: Schema.Number,
@@ -46,11 +47,6 @@ const CachedCommunesSchema = Schema.Struct({
   }),
   communes: Schema.Array(CommuneSchema),
 });
-
-type LookupResult = { readonly ok: true; readonly commune: Commune | null } | {
-  readonly ok: false;
-  readonly error: UpstreamError;
-};
 
 export class CommuneDirectory extends Context.Service<CommuneDirectory, {
   readonly forBounds: (
@@ -65,38 +61,6 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
     const cache = yield* KVStore;
     const config = yield* WorkerConfig;
 
-    const lookupPoint = Effect.fn("CommuneDirectory.lookupPoint")(
-      function* (point: Position) {
-        const url = new URL(COMMUNES_ENDPOINT);
-        url.searchParams.set("lat", point.lat.toFixed(6));
-        url.searchParams.set("lon", point.lng.toFixed(6));
-        url.searchParams.set("fields", "nom,code,codesPostaux,centre,contour");
-        url.searchParams.set("format", "json");
-        const decoded = yield* http.json({
-          provider: "communes",
-          operation: "communes.lookup",
-          url,
-          attributes: { "geo.lat": point.lat, "geo.lng": point.lng },
-          init: {
-            headers: {
-              Accept: "application/json",
-              "User-Agent": "enedis-carte-coupure/1.0",
-            },
-          },
-        }, ApiCommunesSchema);
-        const first = decoded[0];
-        if (first === undefined) return null;
-
-        return {
-          name: first.nom,
-          code: first.code,
-          postcodes: first.codesPostaux ?? [],
-          ...(first.centre === undefined ? {} : { center: first.centre }),
-          ...(first.contour === undefined ? {} : { contour: first.contour }),
-        } satisfies Commune;
-      },
-    );
-
     const forBounds = Effect.fn("CommuneDirectory.forBounds")(
       function* (bounds: Bounds, maximum: number) {
         const cacheBounds = snapped(bounds, VIEWPORT_GRID);
@@ -107,49 +71,74 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
           return cached.communes;
         }
 
-        const results = yield* Effect.forEach(
-          samplePoints(bounds),
-          (point): Effect.Effect<LookupResult> =>
-            lookupPoint(point).pipe(
-              Effect.map((commune) =>
-                ({ ok: true, commune }) satisfies LookupResult
-              ),
-              Effect.catch((error) =>
-                Effect.succeed({ ok: false, error } satisfies LookupResult)
-              ),
-            ),
-          { concurrency: LOOKUP_CONCURRENCY },
+        const url = new URL(COMMUNES_ENDPOINT);
+        url.searchParams.set("geom", JSON.stringify(boundsPolygon(cacheBounds)));
+        url.searchParams.set(
+          "_limit",
+          String(
+            maximum > 0
+              ? Math.min(maximum + 1, API_CARTO_MAXIMUM)
+              : API_CARTO_MAXIMUM,
+          ),
         );
+        const decoded = yield* http.json({
+          provider: "communes",
+          operation: "communes.intersect",
+          url,
+          attributes: {
+            "geo.south": cacheBounds.south,
+            "geo.west": cacheBounds.west,
+            "geo.north": cacheBounds.north,
+            "geo.east": cacheBounds.east,
+          },
+          init: {
+            headers: {
+              Accept: "application/json",
+              "User-Agent": "enedis-carte-coupure/1.0",
+            },
+          },
+        }, ApiCommunesSchema);
 
-        const seen = new Map<string, Commune>();
-        let lastError: UpstreamError | undefined;
-        for (const result of results) {
-          if ("error" in result) {
-            lastError = result.error;
-            continue;
-          }
-          if (result.commune !== null && !seen.has(result.commune.code)) {
-            seen.set(result.commune.code, result.commune);
-          }
-        }
-
-        if (maximum > 0 && seen.size > maximum) {
+        if (maximum > 0 && decoded.features.length > maximum) {
           return yield* TooManyCommunes.make({
             maximum,
             message: `viewport covers more than ${maximum} communes; zoom in`,
           });
         }
 
+        const seen = new Map<string, Commune>();
+        for (const feature of decoded.features) {
+          const properties = feature.properties;
+          if (seen.has(properties.insee_com)) continue;
+          const contour = feature.geometry;
+          const contourBounds = boundsFromGeoJSONGeometry(contour);
+          seen.set(properties.insee_com, {
+            name: properties.nom_com,
+            code: properties.insee_com,
+            postcodes: properties.code_postal === null ||
+                properties.code_postal === undefined
+              ? []
+              : [properties.code_postal],
+            ...(contourBounds === null ? {} : {
+              center: {
+                type: "Point",
+                coordinates: [
+                  (contourBounds.west + contourBounds.east) / 2,
+                  (contourBounds.south + contourBounds.north) / 2,
+                ],
+              },
+            }),
+            ...(contour === null ? {} : { contour }),
+          });
+        }
+
         const communes = Array.from(seen.values()).sort((left, right) =>
           left.code.localeCompare(right.code)
         );
-        if (communes.length === 0 && lastError !== undefined) {
-          return yield* lastError;
-        }
 
         const now = yield* Clock.currentTimeMillis;
         yield* cache.set(cacheKey, {
-          version: 3,
+          version: 4,
           updatedAt: new Date(now).toISOString(),
           bounds: cacheBounds,
           communes,
@@ -164,36 +153,18 @@ export const CommuneDirectoryLive = Layer.effect(CommuneDirectory)(
   }),
 );
 
-function samplePoints(bounds: Bounds): ReadonlyArray<Position> {
-  const points: Array<Position> = [center(bounds)];
-  const seen = new Set([pointKey(points[0])]);
-  const grid = 3;
-  for (let latIndex = 0; latIndex < grid; latIndex += 1) {
-    for (let lngIndex = 0; lngIndex < grid; lngIndex += 1) {
-      const point = {
-        lat: interpolate(bounds.south, bounds.north, latIndex, grid),
-        lng: interpolate(bounds.west, bounds.east, lngIndex, grid),
-      };
-      const key = pointKey(point);
-      if (!seen.has(key)) {
-        seen.add(key);
-        points.push(point);
-      }
-    }
-  }
-
-  return points;
+function boundsPolygon(bounds: Bounds) {
+  return {
+    type: "Polygon",
+    coordinates: [[
+      [bounds.west, bounds.south],
+      [bounds.east, bounds.south],
+      [bounds.east, bounds.north],
+      [bounds.west, bounds.north],
+      [bounds.west, bounds.south],
+    ]],
+  };
 }
-
-const interpolate = (
-  min: number,
-  max: number,
-  index: number,
-  count: number,
-): number =>
-  count <= 1 ? (min + max) / 2 : min + ((max - min) * index) / (count - 1);
-const pointKey = (point: Position): string =>
-  `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`;
 
 export function enedisQueryForCommune(commune: Commune): EnedisQuery {
   const postcode = commune.postcodes[0] ?? "";

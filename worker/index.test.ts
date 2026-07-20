@@ -11,6 +11,21 @@ async function responseBody(response: Response): Promise<unknown> {
   return response.json();
 }
 
+describe("progressive commune limits", () => {
+  it("accepts positive integers and rejects invalid values", () => {
+    assert.strictEqual(testExports.parseCommuneLimit(null), undefined);
+    assert.strictEqual(testExports.parseCommuneLimit("12"), 12);
+    assert.strictEqual(
+      testExports.parseCommuneLimit("0"),
+      "communeLimit must be a positive integer",
+    );
+    assert.strictEqual(
+      testExports.parseCommuneLimit("1.5"),
+      "communeLimit must be a positive integer",
+    );
+  });
+});
+
 describe("worker error responses", () => {
   it("maps invalid viewports to a stable 400 response", async () => {
     const response = testExports.errorResponse(
