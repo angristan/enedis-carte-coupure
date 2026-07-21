@@ -817,10 +817,36 @@ button {
   box-shadow: 0 18px 50px rgb(11 32 34 / 20%);
 }
 
+.verification-widget {
+  width: 100%;
+}
+
 .verification-card p {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+  text-align: center;
+}
+
+.verification-card button {
+  min-height: 44px;
+  padding: 0 18px;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  background: var(--teal);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.verification-card button:hover {
+  background: var(--teal-dark);
+}
+
+.verification-card button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 
 @keyframes pulse {
