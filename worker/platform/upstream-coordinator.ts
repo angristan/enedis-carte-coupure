@@ -575,7 +575,9 @@ async function fetchWithLimits(
       method: input.method.toUpperCase(),
       headers: input.headers,
       ...(input.body === undefined ? {} : { body: input.body }),
-      redirect: "error",
+      // Workers rejects `redirect: "error"`; manual mode still prevents following
+      // an upstream redirect and lets the caller reject the non-2xx response.
+      redirect: "manual",
       signal: controller.signal,
     });
     const text = await readLimitedBody(
@@ -668,5 +670,6 @@ export const testExports = {
   PermitScheduler,
   policyFor,
   handleCoordinatorFetch,
+  fetchWithLimits,
   readLimitedBody,
 };

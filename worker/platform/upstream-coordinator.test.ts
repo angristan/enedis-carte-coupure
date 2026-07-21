@@ -29,6 +29,7 @@ const coordinatedRequest = (
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("upstream token bucket", () => {
@@ -333,6 +334,30 @@ describe("coordinator HTTP boundary", () => {
     assert.deepEqual(await response.json(), {
       error: "coordinator execution failed",
     });
+  });
+});
+
+describe("upstream fetch compatibility", () => {
+  it("uses manual redirect handling supported by Workers", async () => {
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      assert.strictEqual(init?.redirect, "manual");
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testExports.fetchWithLimits(
+      coordinatedRequest({
+        provider: "Turnstile",
+        key: "turnstile:test",
+        operation: "turnstile.verify",
+        url: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        method: "POST",
+      }),
+      testExports.POLICIES.Turnstile,
+    );
+
+    assert.isTrue(result.ok);
+    assert.strictEqual(fetchMock.mock.calls.length, 1);
   });
 });
 
