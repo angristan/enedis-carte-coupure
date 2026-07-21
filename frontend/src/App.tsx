@@ -50,6 +50,7 @@ export function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [sessionVerified, setSessionVerified] = useState(false);
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionAbortRef = useRef<AbortController | null>(null);
@@ -190,6 +191,15 @@ export function App() {
   }, [loadViewport, viewport]);
 
   useEffect(() => {
+    if (!mobilePanelOpen) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMobilePanelOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobilePanelOpen]);
+
+  useEffect(() => {
     if (activeKey.length === 0) return;
     const selected = listRef.current?.querySelector(
       `[data-street-key="${CSS.escape(activeKey)}"]`,
@@ -210,10 +220,12 @@ export function App() {
   const handleInteractionStart = useCallback(() => {
     abortRef.current?.abort();
     activeRequestRef.current = null;
+    setMobilePanelOpen(false);
   }, []);
 
   const handleListSelect = useCallback((street: Street) => {
     setActiveKey(street.key);
+    setMobilePanelOpen(false);
     mapRef.current?.focusStreet(street.key);
   }, []);
 
@@ -289,6 +301,16 @@ export function App() {
 
       </section>
 
+      {mobilePanelOpen
+        ? (
+          <button
+            className="mobile-sheet-backdrop"
+            type="button"
+            aria-label="Fermer la liste des rues"
+            onClick={() => setMobilePanelOpen(false)}
+          />
+        )
+        : null}
       <SidePanel
         ref={listRef}
         data={data}
@@ -296,6 +318,8 @@ export function App() {
         activeKey={activeKey}
         activeFilter={activeFilter}
         query={query}
+        mobileOpen={mobilePanelOpen}
+        onMobileToggle={() => setMobilePanelOpen((open) => !open)}
         onFilterChange={setActiveFilter}
         onQueryChange={setQuery}
         onSelectStreet={handleListSelect}

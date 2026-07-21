@@ -33,7 +33,9 @@ body {
   color: var(--ink);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: var(--canvas);
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button,
@@ -250,6 +252,15 @@ button {
   padding: 24px 24px 0;
   background: var(--panel);
   border-left: 1px solid var(--line);
+}
+
+.side-content {
+  display: contents;
+}
+
+.mobile-sheet-toggle,
+.mobile-sheet-backdrop {
+  display: none;
 }
 
 .side-header {
@@ -538,6 +549,8 @@ button {
   border-top: 1px solid var(--line);
   scrollbar-color: #c7cecc transparent;
   scrollbar-width: thin;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .street-list::-webkit-scrollbar {
@@ -836,17 +849,28 @@ button {
 }
 
 @media (max-width: 850px) {
+  :root {
+    --mobile-sheet-peek: 62px;
+    --mobile-topbar-height: calc(60px + env(safe-area-inset-top, 0px));
+  }
+
   .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(300px, 43dvh) minmax(0, 57dvh);
+    position: relative;
+    display: block;
+  }
+
+  .map-pane {
+    position: absolute;
+    inset: 0;
   }
 
   .map-canvas-shell {
-    inset: 60px 0 0;
+    inset: var(--mobile-topbar-height) 0 0;
   }
 
   .map-topbar {
-    height: 60px;
+    height: var(--mobile-topbar-height);
+    padding-top: env(safe-area-inset-top, 0px);
     padding-right: 10px;
     padding-left: 12px;
   }
@@ -855,11 +879,141 @@ button {
     max-width: 420px;
   }
 
+  .mobile-sheet-backdrop {
+    position: fixed;
+    z-index: 700;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    background: rgb(11 32 34 / 24%);
+    border: 0;
+    cursor: pointer;
+    backdrop-filter: blur(1.5px);
+  }
+
   .side-pane {
+    position: fixed;
+    z-index: 800;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    left: 8px;
+    height: min(74dvh, 680px);
+    max-height: calc(100dvh - var(--mobile-topbar-height) - 10px);
+    gap: 0;
+    padding: 0;
+    background: var(--panel);
+    border: 1px solid rgb(188 199 197 / 90%);
+    border-radius: 18px;
+    box-shadow: 0 -6px 30px rgb(11 32 34 / 18%);
+    transform: translateY(calc(100% - var(--mobile-sheet-peek)));
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+
+  .side-pane.mobile-open {
+    transform: translateY(0);
+  }
+
+  .mobile-sheet-toggle {
+    position: relative;
+    display: grid;
+    width: 100%;
+    min-height: var(--mobile-sheet-peek);
+    flex: 0 0 var(--mobile-sheet-peek);
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 15px 16px 8px;
+    color: var(--ink);
+    text-align: left;
+    background: #fff;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    cursor: pointer;
+  }
+
+  .mobile-open .mobile-sheet-toggle {
+    border-bottom-color: var(--line-soft);
+  }
+
+  .mobile-sheet-toggle:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: -3px;
+  }
+
+  .mobile-sheet-handle {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 38px;
+    height: 4px;
+    background: #c8d0ce;
+    border-radius: 999px;
+    transform: translateX(-50%);
+  }
+
+  .mobile-sheet-summary,
+  .mobile-sheet-action {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .mobile-sheet-summary {
+    gap: 7px;
+  }
+
+  .mobile-sheet-summary svg {
+    flex: 0 0 auto;
+    color: var(--teal-dark);
+  }
+
+  .mobile-sheet-summary strong {
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mobile-sheet-summary span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-sheet-action {
+    gap: 4px;
+    color: var(--teal-dark);
+    font-size: 12px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .mobile-sheet-action svg {
+    transition: transform 180ms ease;
+  }
+
+  .mobile-open .mobile-sheet-action svg {
+    transform: rotate(180deg);
+  }
+
+  .side-content {
+    display: flex;
+    min-height: 0;
+    visibility: hidden;
+    flex: 1 1 auto;
+    flex-direction: column;
     gap: 10px;
-    padding: 14px 16px 0;
-    border-top: 1px solid var(--line);
-    border-left: 0;
+    overflow: hidden;
+    padding: 12px 16px 0;
+    transition: visibility 0s linear 220ms;
+  }
+
+  .mobile-open .side-content {
+    visibility: visible;
+    transition-delay: 0s;
   }
 
   .side-header h2 {
@@ -879,19 +1033,18 @@ button {
     padding-right: 14px;
     padding-left: 16px;
   }
+
+  .maplibregl-ctrl-bottom-left {
+    bottom: calc(var(--mobile-sheet-peek) + 14px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 @media (max-width: 620px) {
-  .app-shell {
-    grid-template-rows: minmax(260px, 39dvh) minmax(0, 61dvh);
-  }
-
-  .map-canvas-shell {
-    inset: 56px 0 0;
+  :root {
+    --mobile-topbar-height: calc(56px + env(safe-area-inset-top, 0px));
   }
 
   .map-topbar {
-    height: 56px;
     gap: 8px;
     padding-right: 8px;
     padding-left: 10px;
@@ -933,8 +1086,21 @@ button {
   }
 
   .side-pane {
+    right: 6px;
+    bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    left: 6px;
+    height: min(78dvh, 680px);
+    border-radius: 16px;
+  }
+
+  .side-content {
     gap: 8px;
-    padding: 12px 12px 0;
+    padding: 10px 12px 0;
+  }
+
+  .mobile-sheet-toggle {
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .eyebrow {
@@ -959,7 +1125,11 @@ button {
   }
 
   .search-box {
-    height: 40px;
+    height: 44px;
+  }
+
+  .search-box input {
+    font-size: 16px;
   }
 
   .search-hint {
@@ -967,7 +1137,7 @@ button {
   }
 
   .segment {
-    height: 36px;
+    height: 44px;
     font-size: 12px;
   }
 
@@ -1007,22 +1177,28 @@ button {
 }
 
 @media (max-width: 390px) {
-  .app-shell {
-    grid-template-rows: minmax(240px, 37dvh) minmax(0, 63dvh);
-  }
-
   .map-actions a,
   .insight-grid {
     display: none;
   }
 
   .source-badge {
-    max-width: 140px;
-    font-size: 9px;
+    display: none;
+  }
+
+  .mobile-sheet-action {
+    font-size: 11px;
   }
 
   .brand-copy p {
     max-width: 190px;
+  }
+}
+
+@media (max-width: 850px) and (max-height: 560px) {
+  .side-pane {
+    height: calc(100dvh - 12px - env(safe-area-inset-bottom, 0px));
+    max-height: none;
   }
 }
 

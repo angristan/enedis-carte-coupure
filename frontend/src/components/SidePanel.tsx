@@ -6,9 +6,11 @@ import {
 } from "react";
 import {
   Activity,
+  ChevronDown,
   ChevronRight,
   Clock3,
   type LucideIcon,
+  List,
   MapPinned,
   Search,
 } from "lucide-react";
@@ -29,6 +31,8 @@ interface SidePanelProps {
   readonly activeKey: string;
   readonly activeFilter: StreetFilter;
   readonly query: string;
+  readonly mobileOpen: boolean;
+  readonly onMobileToggle: () => void;
   readonly onFilterChange: (filter: StreetFilter) => void;
   readonly onQueryChange: (query: string) => void;
   readonly onSelectStreet: (street: Street) => void;
@@ -42,6 +46,8 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
       activeKey,
       activeFilter,
       query,
+      mobileOpen,
+      onMobileToggle,
       onFilterChange,
       onQueryChange,
       onSelectStreet,
@@ -77,68 +83,92 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
     }, []);
 
     return (
-      <aside className="side-pane" aria-label="Détails des coupures">
-        <div className="side-header">
-          <div className="side-heading">
-            <p className="eyebrow">
-              <Activity size={13} aria-hidden="true" />
-              Veille réseau
+      <aside
+        className={mobileOpen ? "side-pane mobile-open" : "side-pane"}
+        aria-label="Détails des coupures"
+      >
+        <button
+          className="mobile-sheet-toggle"
+          type="button"
+          aria-controls="outage-details-content"
+          aria-expanded={mobileOpen}
+          onClick={onMobileToggle}
+        >
+          <span className="mobile-sheet-handle" aria-hidden="true" />
+          <span className="mobile-sheet-summary">
+            <List size={18} aria-hidden="true" />
+            <strong>{formatNumber(allStreets.length)}</strong>
+            <span>rues touchées</span>
+          </span>
+          <span className="mobile-sheet-action">
+            {mobileOpen ? "Réduire" : "Voir la liste"}
+            <ChevronDown size={18} aria-hidden="true" />
+          </span>
+        </button>
+
+        <div id="outage-details-content" className="side-content">
+          <div className="side-header">
+            <div className="side-heading">
+              <p className="eyebrow">
+                <Activity size={13} aria-hidden="true" />
+                Veille réseau
+              </p>
+              <h2><strong>{formatNumber(allStreets.length)}</strong> rues touchées</h2>
+              <p className="side-subtitle">dans la zone affichée</p>
+            </div>
+            <p className="source-badge">
+              Source&nbsp;: Enedis<span> · service non officiel</span>
             </p>
-            <h2><strong>{formatNumber(allStreets.length)}</strong> rues touchées</h2>
-            <p className="side-subtitle">dans la zone affichée</p>
           </div>
-          <p className="source-badge">
-            Source&nbsp;: Enedis<span> · service non officiel</span>
-          </p>
-        </div>
 
-        <label className="search-box">
-          <Search size={18} aria-hidden="true" />
-          <span className="sr-only">Recherche</span>
-          <input
-            ref={searchInputRef}
-            value={query}
-            type="search"
-            placeholder="Rechercher une rue, une commune..."
-            autoComplete="off"
-            onChange={handleQueryChange}
+          <label className="search-box">
+            <Search size={18} aria-hidden="true" />
+            <span className="sr-only">Recherche</span>
+            <input
+              ref={searchInputRef}
+              value={query}
+              type="search"
+              placeholder="Rechercher une rue, une commune..."
+              autoComplete="off"
+              onChange={handleQueryChange}
+            />
+            <span className="search-hint" aria-hidden="true">⌘ K</span>
+          </label>
+
+          <SegmentedFilter
+            activeFilter={activeFilter}
+            counts={filterCounts}
+            onChange={onFilterChange}
           />
-          <span className="search-hint" aria-hidden="true">⌘ K</span>
-        </label>
 
-        <SegmentedFilter
-          activeFilter={activeFilter}
-          counts={filterCounts}
-          onChange={onFilterChange}
-        />
+          <div className="insight-grid" aria-label="Résumé">
+            <Insight
+              icon={MapPinned}
+              label="Zone analysée"
+              value={communeCount !== undefined && communeTotal !== undefined &&
+                  communeCount < communeTotal
+                ? `${formatNumber(communeCount)} / ${formatNumber(communeTotal)} communes`
+                : `${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
+            />
+            <Insight
+              icon={Clock3}
+              label="Actualisation"
+              value={formatTime(data?.updatedAt)}
+            />
+          </div>
 
-        <div className="insight-grid" aria-label="Résumé">
-          <Insight
-            icon={MapPinned}
-            label="Zone analysée"
-            value={communeCount !== undefined && communeTotal !== undefined &&
-                communeCount < communeTotal
-              ? `${formatNumber(communeCount)} / ${formatNumber(communeTotal)} communes`
-              : `${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
-          />
-          <Insight
-            icon={Clock3}
-            label="Actualisation"
-            value={formatTime(data?.updatedAt)}
+          <Legend />
+          <div className="list-heading">
+            <span>Rues signalées</span>
+            <strong>{formatNumber(streets.length)}</strong>
+          </div>
+          <StreetList
+            ref={ref}
+            activeKey={activeKey}
+            streets={streets}
+            onSelectStreet={onSelectStreet}
           />
         </div>
-
-        <Legend />
-        <div className="list-heading">
-          <span>Rues signalées</span>
-          <strong>{formatNumber(streets.length)}</strong>
-        </div>
-        <StreetList
-          ref={ref}
-          activeKey={activeKey}
-          streets={streets}
-          onSelectStreet={onSelectStreet}
-        />
       </aside>
     );
   },
