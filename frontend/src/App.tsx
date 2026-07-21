@@ -288,7 +288,7 @@ export function App() {
               />
             </button>
             <a
-              href="https://github.com/angristan/enedis-carte-coupure"
+              href="https://github.com/angristan/enedis"
               target="_blank"
               rel="noreferrer"
               title="Voir le repo GitHub"
