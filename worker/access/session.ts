@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Option, Schedule, Schema } from "effect";
 import type { SessionStatus } from "../../shared/api.js";
 import {
   RateLimitExceeded,
@@ -16,6 +16,7 @@ const TURNSTILE_ACTION = "outages_access";
 const PRODUCTION_COOKIE = "__Host-outages_session";
 const LOCAL_COOKIE = "outages_session";
 const RATE_LIMIT_RETRY_AFTER = 60;
+const TURNSTILE_RETRY_POLICY = Schedule.recurs(1);
 
 const TurnstileResponseSchema = Schema.Struct({
   success: Schema.Boolean,
@@ -139,18 +140,32 @@ export function accessControlLayer(env: WorkerEnv) {
           },
         },
       }, TurnstileResponseSchema).pipe(
-        Effect.mapError(() =>
-          VerificationFailed.make({ message: "Turnstile verification failed" })
-        ),
+        Effect.retry(TURNSTILE_RETRY_POLICY),
+        Effect.mapError((error) => {
+          console.warn({
+            event: "turnstile.siteverify_unavailable",
+            errorTag: error._tag,
+          });
+          return VerificationFailed.make({
+            message: "Turnstile verification failed",
+          });
+        }),
       );
 
+      const actionMatches = outcome.action === TURNSTILE_ACTION;
+      const hostnameMatches = config.turnstileHostname.length === 0 ||
+        outcome.hostname === config.turnstileHostname;
       if (
         !outcome.success ||
-        (config.production &&
-          (outcome.action !== TURNSTILE_ACTION ||
-            (config.turnstileHostname.length > 0 &&
-              outcome.hostname !== config.turnstileHostname)))
+        (config.production && (!actionMatches || !hostnameMatches))
       ) {
+        console.warn({
+          event: "turnstile.verification_rejected",
+          success: outcome.success,
+          errorCodes: outcome["error-codes"] ?? [],
+          actionMatches,
+          hostnameMatches,
+        });
         return yield* VerificationFailed.make({
           message: "Turnstile verification was rejected",
         });

@@ -1,9 +1,26 @@
-import { assert, describe, it, layer } from "@effect/vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  it,
+  layer,
+  vi,
+} from "@effect/vitest";
 import { Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import { UpstreamTransportError } from "../domain/errors.js";
 import { WorkerConfig, type WorkerEnv } from "../platform/config.js";
 import { RawHttp } from "../platform/http.js";
 import { AccessControl, accessControlLayer, testExports } from "./session.js";
+
+beforeEach(() => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const baseConfig = {
   cachePrefix: "test",
@@ -97,6 +114,28 @@ const RejectingRateLimitTest = makeAccessLayer(
   validTurnstileResponse,
   rejectingRateLimiter,
 );
+const retryAttempts = { count: 0 };
+const RetryingAccessTest = accessControlLayer(environment(allowingRateLimiter)).pipe(
+  Layer.provide(Layer.mergeAll(
+    Layer.succeed(WorkerConfig)(baseConfig),
+    Layer.succeed(RawHttp)({
+      json: (_request, schema) =>
+        Effect.suspend(() => {
+          retryAttempts.count += 1;
+          if (retryAttempts.count === 1) {
+            return Effect.fail(UpstreamTransportError.make({
+              provider: "Turnstile",
+              operation: "turnstile.verify",
+              cause: new Error("temporary coordinator failure"),
+            }));
+          }
+          return Schema.decodeUnknownEffect(schema)(validTurnstileResponse).pipe(
+            Effect.orDie,
+          );
+        }),
+    }),
+  )),
+);
 
 describe("session creation access control", () => {
   layer(AccessTest)((it) => {
@@ -148,6 +187,20 @@ describe("session creation access control", () => {
           access.require(authenticatedRequest),
         );
         assert.strictEqual(expired._tag, "VerificationRequired");
+      }));
+  });
+
+  layer(RetryingAccessTest)((it) => {
+    it.effect("retries one transient Siteverify transport failure", () =>
+      Effect.gen(function* () {
+        const access = yield* AccessControl;
+        const created = yield* access.create(
+          creationRequest(),
+          "turnstile-token",
+        );
+
+        assert.strictEqual(retryAttempts.count, 2);
+        assert.isTrue(created.cookie.length > 0);
       }));
   });
 
