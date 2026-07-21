@@ -4,6 +4,12 @@
 
 [Open the live map →](https://enedis.stanislas.cloud)
 
+<p align="center">
+  <a href="https://enedis.stanislas.cloud">
+    <img src="frontend/public/og-image.png" alt="Enedis outage map — power outages, street by street" width="1200" />
+  </a>
+</p>
+
 > **International context:** Enedis operates most of the public electricity distribution network in mainland
 > France. The application uses French network terminology: **HTA** means medium voltage and **BT** means low
 > voltage. The interface is in French because the service covers French outage data; the project documentation is

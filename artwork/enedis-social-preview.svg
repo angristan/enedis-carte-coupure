@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Enedis outage map</title>
+  <desc id="desc">A live, street-level map of power outages reported by Enedis in France.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b2022"/>
+      <stop offset="0.58" stop-color="#102d2e"/>
+      <stop offset="1" stop-color="#075d55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#43c9ae" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#43c9ae" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#b4d7cf" stroke-opacity="0.055"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#001415" flood-opacity="0.34"/>
+    </filter>
+    <filter id="small-shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0b2022" flood-opacity="0.18"/>
+    </filter>
+    <clipPath id="map-clip">
+      <rect x="674" y="66" width="454" height="498" rx="24"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#background)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <circle cx="1060" cy="40" r="430" fill="url(#glow)"/>
+  <circle cx="510" cy="666" r="340" fill="url(#glow)" opacity="0.56"/>
+
+  <!-- Product mark -->
+  <g transform="translate(70 62)">
+    <rect width="58" height="58" rx="15" fill="#16a28f"/>
+    <path d="M34.5 9 15 34.4h13.5L26 51l20.5-27.3H33L34.5 9Z" fill="#fff"/>
+    <text x="78" y="25" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="750" letter-spacing="2.8">ENEDIS</text>
+    <text x="78" y="48" fill="#9bc7c1" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="650" letter-spacing="2.4">OUTAGE MAP</text>
+  </g>
+
+  <!-- Main message -->
+  <g transform="translate(70 172)" font-family="Inter, Arial, sans-serif">
+    <g>
+      <rect width="180" height="38" rx="19" fill="#daf7ef" fill-opacity="0.12" stroke="#a4ddd2" stroke-opacity="0.3"/>
+      <circle cx="22" cy="19" r="5" fill="#4ee2bc"/>
+      <circle cx="22" cy="19" r="10" fill="none" stroke="#4ee2bc" stroke-opacity="0.28"/>
+      <text x="40" y="24" fill="#d8f5ef" font-size="13" font-weight="700" letter-spacing="1.5">LIVE · FRANCE</text>
+    </g>
+
+    <text x="0" y="112" fill="#fff" font-size="62" font-weight="760" letter-spacing="-2.3">
+      <tspan x="0">Power outages,</tspan>
+      <tspan x="0" dy="72">street by street.</tspan>
+    </text>
+
+    <text x="0" y="288" fill="#b8d2ce" font-size="21" font-weight="430">
+      <tspan x="0">Current public outage reports from Enedis,</tspan>
+      <tspan x="0" dy="31">mapped across France.</tspan>
+    </text>
+
+    <g transform="translate(0 352)">
+      <path d="M0 12h26" stroke="#4ee2bc" stroke-width="3" stroke-linecap="round"/>
+      <path d="m20 6 6 6-6 6" fill="none" stroke="#4ee2bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="42" y="18" fill="#f4fffc" font-size="17" font-weight="650">enedis.stanislas.cloud</text>
+    </g>
+  </g>
+
+  <!-- Stylized map card -->
+  <g filter="url(#shadow)">
+    <rect x="674" y="66" width="454" height="498" rx="24" fill="#eef3f1"/>
+  </g>
+  <g clip-path="url(#map-clip)">
+    <rect x="674" y="66" width="454" height="498" fill="#e7eeeb"/>
+
+    <!-- Map blocks -->
+    <g fill="#f8faf9" stroke="#dbe4e0" stroke-width="1.5">
+      <path d="M690 135 776 112l42 61-38 53-92-19Z"/>
+      <path d="m825 103 88-25 45 57-18 67-82 9-36-43Z"/>
+      <path d="m974 83 99 14 39 66-37 54-105-15-18-64Z"/>
+      <path d="m687 237 82 7 39 70-49 52-78-23Z"/>
+      <path d="m803 232 89-11 47 52-19 78-95 9-41-53Z"/>
+      <path d="m951 226 83-7 78 49-8 78-85 30-69-52Z"/>
+      <path d="m685 377 87-5 47 53-24 91-108 20Z"/>
+      <path d="m830 380 91-16 48 70-32 102-105-6-29-76Z"/>
+      <path d="m976 392 87-31 69 50-18 110-118 17-31-70Z"/>
+    </g>
+
+    <!-- Seine -->
+    <path d="M648 392c74-75 119-16 187-57 52-31 59-92 130-84 76 8 77 100 183 71" fill="none" stroke="#b7dfe3" stroke-width="30" stroke-linecap="round"/>
+    <path d="M648 392c74-75 119-16 187-57 52-31 59-92 130-84 76 8 77 100 183 71" fill="none" stroke="#d2eef0" stroke-width="18" stroke-linecap="round"/>
+
+    <!-- Street network -->
+    <g fill="none" stroke="#c5d0cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m646 177 116 50 76 17 98-29 213 45"/>
+      <path d="m705 93 92 94 53 102 16 97 71 178"/>
+      <path d="m862 66 10 100 46 83 75 72 125 50"/>
+      <path d="m1042 56-39 100 5 106 69 111 15 196"/>
+      <path d="m659 480 94-68 102-19 75 31 80 78 121 18"/>
+      <path d="m710 540 41-120-10-105 45-80 14-146"/>
+      <path d="m678 287 113 8 97 38 92 0 139-61"/>
+    </g>
+    <g fill="none" stroke="#d5ddda" stroke-width="2.2" stroke-linecap="round">
+      <path d="m696 151 81 18 67-54 73 61 104-13 91 43"/>
+      <path d="m687 265 64 38 18 68 100 75 23 99"/>
+      <path d="m746 82 37 74 92 38 104-35 97 67"/>
+      <path d="m824 76 25 86-12 108 45 75 116 94"/>
+      <path d="m958 71-18 102 34 82-21 93 27 180"/>
+      <path d="m1094 97-62 82 18 91-18 104 80 75"/>
+      <path d="m695 449 91-23 89 58 112-10 131-71"/>
+    </g>
+
+    <!-- Commune boundary -->
+    <path d="m738 134 119-46 133 38 88 112-22 151-99 107-143-14-91-106-6-135Z" fill="#46bda3" fill-opacity="0.055" stroke="#087d70" stroke-opacity="0.58" stroke-width="2.5" stroke-dasharray="8 8"/>
+
+    <!-- Highlighted affected streets with white casings -->
+    <g fill="none" stroke="#fffef8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m728 255 63 40 93 38"/>
+      <path d="m881 183 42 72 72 67"/>
+      <path d="m786 426 72-31 79 29"/>
+    </g>
+    <g fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m728 255 63 40 93 38" stroke="#e45245"/>
+      <path d="m881 183 42 72 72 67" stroke="#e98a19"/>
+      <path d="m786 426 72-31 79 29" stroke="#087d70"/>
+    </g>
+
+    <!-- Map header -->
+    <g filter="url(#small-shadow)">
+      <rect x="696" y="88" width="180" height="58" rx="13" fill="#fff"/>
+    </g>
+    <text x="714" y="112" fill="#687477" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="1.4">STREET-LEVEL VIEW</text>
+    <text x="714" y="134" fill="#162023" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="750">Paris, France</text>
+
+    <!-- Status legend -->
+    <g filter="url(#small-shadow)">
+      <rect x="722" y="491" width="354" height="52" rx="15" fill="#fff"/>
+    </g>
+    <g font-family="Inter, Arial, sans-serif" font-size="10" font-weight="750" letter-spacing="0.7">
+      <circle cx="746" cy="517" r="6" fill="#e45245"/>
+      <text x="758" y="521" fill="#3e4a4d">INCIDENT</text>
+      <circle cx="838" cy="517" r="6" fill="#e98a19"/>
+      <text x="850" y="521" fill="#3e4a4d">PLANNED</text>
+      <circle cx="943" cy="517" r="6" fill="#087d70"/>
+      <text x="955" y="521" fill="#3e4a4d">LOW VOLTAGE</text>
+    </g>
+  </g>
+
+  <text x="1128" y="605" text-anchor="end" fill="#8fb9b2" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="650" letter-spacing="1.3">UNOFFICIAL · OPEN SOURCE</text>
+</svg>
