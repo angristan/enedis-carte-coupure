@@ -1,13 +1,13 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import type { GeocodeResult, PublicGeocode } from "./models.js";
-import { GeocodePayloadSchema } from "./models.js";
-import { KVStore, RawHttp } from "./platform.js";
-import { stripAccents } from "./util.js";
-
-export const GEOCODE_PRIMARY_ENDPOINT =
-  "https://data.geopf.fr/geocodage/search";
-export const GEOCODE_FALLBACK_ENDPOINT =
-  "https://api-adresse.data.gouv.fr/search/";
+import type { GeocodeResult, PublicGeocode } from "../domain/models.js";
+import { GeocodePayloadSchema } from "../domain/models.js";
+import { RawHttp } from "../platform/http.js";
+import { KVStore } from "../platform/kv.js";
+import { stripAccents } from "../domain/util.js";
+import {
+  GEOCODE_FALLBACK_ENDPOINT,
+  GEOCODE_PRIMARY_ENDPOINT,
+} from "../sources.js";
 
 const GEOCODE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -90,12 +90,17 @@ export const GeocoderLive = Layer.effect(Geocoder)(Effect.gen(function* () {
       return { ...cached.result, cached: true } satisfies GeocodeResult;
     }
 
-    const fallback = lookup(GEOCODE_FALLBACK_ENDPOINT, query);
     const result = yield* lookup(GEOCODE_PRIMARY_ENDPOINT, query).pipe(
-      Effect.flatMap((primary) =>
-        primary.status === "ok" ? Effect.succeed(primary) : fallback
+      Effect.catch((error) =>
+        error._tag === "UpstreamStatusError" && error.status === 429
+          ? Effect.fail(error)
+          : Effect.succeed({ status: "miss", query } satisfies PublicGeocode)
       ),
-      Effect.catch(() => fallback),
+      Effect.flatMap((primary) =>
+        primary.status === "ok"
+          ? Effect.succeed(primary)
+          : lookup(GEOCODE_FALLBACK_ENDPOINT, query)
+      ),
       Effect.catch((error) =>
         Effect.succeed(
           {

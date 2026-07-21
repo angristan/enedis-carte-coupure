@@ -1,14 +1,6 @@
-export interface Bounds {
-  readonly south: number;
-  readonly west: number;
-  readonly north: number;
-  readonly east: number;
-}
+import type { Bounds, Position } from "../../shared/api.js";
 
-export interface Position {
-  readonly lat: number;
-  readonly lng: number;
-}
+export type { Bounds, Position } from "../../shared/api.js";
 
 type BoundsValues = Pick<URLSearchParams, "get" | "has">;
 
@@ -18,22 +10,6 @@ export type ParsedBounds = { readonly hasBounds: false } | {
 } | { readonly hasBounds: true; readonly error: string };
 
 export function parseBounds(values: BoundsValues): ParsedBounds {
-  const bbox = trim(values.get("bbox"));
-  if (bbox.length > 0) {
-    const parts = bbox.split(",");
-    if (parts.length !== 4) {
-      return { hasBounds: true, error: "bbox must be west,south,east,north" };
-    }
-    const west = parseCoordinate(parts[0], "bbox west");
-    const south = parseCoordinate(parts[1], "bbox south");
-    const east = parseCoordinate(parts[2], "bbox east");
-    const north = parseCoordinate(parts[3], "bbox north");
-    if (typeof west === "string") return { hasBounds: true, error: west };
-    if (typeof south === "string") return { hasBounds: true, error: south };
-    if (typeof east === "string") return { hasBounds: true, error: east };
-    if (typeof north === "string") return { hasBounds: true, error: north };
-    return normalizeAndValidate({ south, west, north, east });
-  }
   const names = ["south", "west", "north", "east"];
   if (!names.some((name) => values.has(name))) return { hasBounds: false };
   for (const name of names) {
@@ -149,7 +125,9 @@ function normalizeAndValidate(input: Bounds): ParsedBounds {
 }
 
 function parseCoordinate(value: string | null, name: string): number | string {
-  const parsed = Number.parseFloat(trim(value));
+  const normalized = trim(value);
+  if (normalized.length === 0) return `invalid ${name}`;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : `invalid ${name}`;
 }
 

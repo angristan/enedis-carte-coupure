@@ -1,5 +1,5 @@
 import { Effect, Option } from "effect";
-import { CryptoError } from "./util.js";
+import { CryptoError } from "../domain/util.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

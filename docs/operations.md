@@ -36,7 +36,8 @@ The Worker deployment includes:
 - the React build as Workers Static Assets;
 - the `CACHE` Workers KV binding;
 - the `UPSTREAM_COORDINATOR` SQLite Durable Object;
-- the `API_RATE_LIMITER` binding at 60 requests per minute per verified session;
+- the `API_RATE_LIMITER` binding at approximately 60 requests per minute per verified session and Cloudflare
+  location;
 - the managed pre-clearance Turnstile widget for `enedis.stanislas.cloud`;
 - the `enedis.stanislas.cloud` Custom Domain;
 - sampled Workers observability and application traces.
@@ -106,9 +107,7 @@ The API exposes its application-level cache state through headers:
 
 - `X-App-Cache: COMMUNE` for fixed viewport pages composed from commune facts;
 - `X-App-Cache-Commune-Hits`, `X-App-Cache-Commune-Stale`, and `X-App-Cache-Commune-Misses` for the
-  per-commune breakdown of viewport responses;
-- `X-App-Cache-Refreshed-At` and `X-App-Cache-Fresh-Until` for cached response timing;
-- `X-App-Cache-Refresh: background` when stale data triggered a refresh.
+  per-commune breakdown of viewport responses.
 
 KV is eventually consistent. A recently written entry may not be visible at every edge location immediately, so
 occasional repeated upstream work after a cold deployment is expected.
@@ -118,13 +117,15 @@ occasional repeated upstream work after a cold deployment is expected.
 Workers observability is sampled in `wrangler.jsonc`. Provider and cache adapters retain named Effect operations:
 
 - `cache.get` and `cache.put`
-- `communes.lookup`
-- `enedis.fetch`
-- `geocode.lookup`
-- `streetgeom.lookup`
+- `upstream.request`
+- `CommuneDirectory.forBounds`
+- `Enedis.fetch`
+- `Geocoder.lookup`
+- `StreetGeometry.lookup`
 
 Useful bounded attributes include provider names, commune coordinates, street-name batch sizes, cache keys, and
-`http.response.status_code`. Cloudflare also creates platform spans for Durable Object calls, outgoing `fetch`, and KV operations.
+`http.response.status_code`. Cloudflare also creates platform spans for Durable Object calls, outgoing `fetch`, and
+KV operations.
 
 Higher-level workflows remain named with `Effect.fn`, which improves Effect traces and failure stacks without
 creating an extra native span for every pure transformation. Unexpected causes are logged once at the Worker
@@ -146,8 +147,8 @@ brief repeated work after a cold write.
 
 ### Street lines are missing
 
-Separate geocoding misses from geometry misses in the response statistics. Then inspect `geocode.lookup`,
-`streetgeom.requests`, and `streetgeom.lookup` spans. A technical Enedis label may legitimately have no matching
+Separate geocoding misses from geometry misses in the response statistics. Then inspect `Geocoder.lookup`,
+`StreetGeometry.lookup`, and `upstream.request` spans. A technical Enedis label may legitimately have no matching
 street geometry.
 
 ### The Railway URL does not redirect

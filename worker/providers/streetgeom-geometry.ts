@@ -1,5 +1,5 @@
-import type { Position } from "./geo.js";
-import type { StreetGeometry } from "./models.js";
+import type { Position } from "../domain/geo.js";
+import type { StreetGeometry } from "../domain/models.js";
 
 const MAX_POINT_MATCH_METERS = 1800;
 const POINT_MATCH_SLACK_METERS = 350;

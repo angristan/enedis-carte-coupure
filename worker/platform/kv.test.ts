@@ -1,14 +1,14 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
-import { MemoryKVLayer } from "./cache.js";
+import { MemoryKVLayer } from "./memory-kv.js";
+import { parseDuration } from "./config.js";
 import {
-  KVStore,
-  parseDuration,
   RawHttp,
   RawHttpLive,
   UpstreamCoordinatorClient,
-} from "./platform.js";
-import { sha256Hex } from "./util.js";
+} from "./http.js";
+import { KVStore } from "./kv.js";
+import { sha256Hex } from "../domain/util.js";
 
 const CoordinatorTest = Layer.succeed(UpstreamCoordinatorClient)({
   request: () =>

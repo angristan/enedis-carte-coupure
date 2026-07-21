@@ -1,11 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { OutageResponse } from "../shared/api.js";
+import type { OutageResponse } from "../../shared/api.js";
+import { mergeOutageResponses } from "./outage-merging.js";
+import { normalizeOutageInputs } from "./outage-response.js";
 import {
-  mergeOutageResponses,
   normalizeStreet,
   parseLocalisation,
-} from "./outages.js";
-import { normalizeOutageInputs } from "./outage-response.js";
+} from "./street-normalization.js";
 
 function response(
   polygon: unknown,

@@ -1,13 +1,12 @@
 import { Context, Effect, Layer } from "effect";
-import type { EnedisPayload, EnedisQuery } from "./models.js";
-import { EnedisPayloadSchema } from "./models.js";
-import { RawHttp } from "./platform.js";
-import type { UpstreamError } from "./errors.js";
-
-export const ENEDIS_ORIGIN = "https://www.enedis.fr";
-export const ENEDIS_ENDPOINT = `${ENEDIS_ORIGIN}/panne-interruption-ajax`;
-export const ENEDIS_RESULT_PAGE =
-  `${ENEDIS_ORIGIN}/resultat-panne-interruption`;
+import type { EnedisPayload, EnedisQuery } from "../domain/models.js";
+import { EnedisPayloadSchema } from "../domain/models.js";
+import { RawHttp } from "../platform/http.js";
+import type { UpstreamError } from "../domain/errors.js";
+import {
+  ENEDIS_ENDPOINT,
+  ENEDIS_RESULT_PAGE,
+} from "../sources.js";
 
 const DEFAULT_LONGITUDE = "2.347";
 const DEFAULT_LATITUDE = "48.859";

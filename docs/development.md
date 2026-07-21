@@ -97,7 +97,11 @@ bun run build
 ```text
 frontend/               React, MapLibre GL, and Effect API client
 shared/                 Effect Schema public API contract
-worker/                 Effect services, Worker API, and data pipeline
+worker/                 Worker API and application orchestration
+  access/                Turnstile sessions, signing, and cursors
+  domain/                Schemas, errors, geography, and pure outage logic
+  platform/              Cloudflare configuration, KV, HTTP, tracing, and coordinator
+  providers/             Enedis, IGN, geocoding, and Overpass adapters
 railway-redirect/       Legacy Railway URL redirect service
 docs/                   Architecture, API, development, and operations guides
 wrangler.jsonc          Worker bindings, variables, routes, and observability
@@ -119,14 +123,13 @@ The main modules are intentionally separated by responsibility:
 
 - `shared/api.ts` defines the public response schemas consumed by both runtimes.
 - `worker/index.ts` is the thin routing, layer assembly, and `Effect.runPromise` boundary.
-- `worker/platform.ts` provides configuration, coordinated HTTP, KV, rate-limit, request context, and background-task services.
-- `worker/session.ts`, `signing.ts`, and `cursor.ts` own verification, signed sessions, and pagination integrity.
-- `worker/upstream-coordinator.ts` enforces global provider budgets, concurrency, coalescing, deadlines, and body limits.
-- `worker/service.ts` owns outage caching and fixed viewport-page orchestration.
-- `worker/communes.ts`, `enedis.ts`, `geocode.ts`, and `streetgeom.ts` are provider services.
-- `worker/streetgeom-overpass.ts` and `streetgeom-geometry.ts` isolate query building and geometry math.
-- `worker/outages.ts` owns provider-backed enrichment; `outage-response.ts`, `outage-merging.ts`, `outage-values.ts`, `outage-polygons.ts`, and `street-normalization.ts` contain focused pure transformations.
-- `worker/errors.ts` defines the typed failure contract.
+- `worker/service.ts` owns outage caching and fixed viewport-page orchestration; `worker/normalizer.ts` coordinates
+  enrichment.
+- `worker/access/` owns verification, signed sessions, and pagination integrity.
+- `worker/domain/` owns the typed failure contract, geography, schemas, and focused pure outage transformations.
+- `worker/platform/` owns Cloudflare configuration, request context, coordinated HTTP, KV, tracing, and the Durable
+  Object scheduler.
+- `worker/providers/` contains the Enedis, IGN, geocoding, and Overpass adapters plus isolated geometry/query helpers.
 - `frontend/src/api/client.ts` performs session and cursor-page requests and validates responses before React sees them.
 - `frontend/src/domain/outagePages.ts` merges unique pages into one map response.
 

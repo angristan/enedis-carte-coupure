@@ -1,9 +1,10 @@
-import { ENEDIS_ENDPOINT } from "./enedis.js";
+import { combinePolygons } from "./outage-polygons.js";
 import {
+  ENEDIS_ENDPOINT,
   GEOCODE_FALLBACK_ENDPOINT,
   GEOCODE_PRIMARY_ENDPOINT,
-} from "./geocode.js";
-import { combinePolygons } from "./outage-polygons.js";
+  STREET_GEOMETRY_PRIMARY_ENDPOINT,
+} from "../sources.js";
 import type {
   Commune,
   EnedisQuery,
@@ -24,7 +25,6 @@ import {
   uniqueAddresses,
 } from "./outage-values.js";
 import { parseLocalisation } from "./street-normalization.js";
-import { STREET_GEOMETRY_PRIMARY_ENDPOINT } from "./streetgeom.js";
 import { addUnique, stripAccents } from "./util.js";
 
 export function normalizeOutageInputs(

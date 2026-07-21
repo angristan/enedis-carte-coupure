@@ -2,14 +2,25 @@ import { assert, describe, it } from "@effect/vitest";
 import { boundsCacheKey, parseBounds, snapped } from "./geo.js";
 
 describe("geo bounds", () => {
-  it("parses bbox in west,south,east,north order", () => {
+  it("parses explicit viewport coordinates", () => {
     assert.deepEqual(
-      parseBounds(new URLSearchParams("bbox=2.2,48.8,2.4,48.9")),
+      parseBounds(
+        new URLSearchParams("south=48.8&west=2.2&north=48.9&east=2.4"),
+      ),
       {
         hasBounds: true,
         bounds: { south: 48.8, west: 2.2, north: 48.9, east: 2.4 },
       },
     );
+  });
+  it("rejects coordinates with trailing garbage", () => {
+    const result = parseBounds(
+      new URLSearchParams("south=48oops&west=2.2&north=48.9&east=2.4"),
+    );
+    assert.deepEqual(result, {
+      hasBounds: true,
+      error: "invalid south",
+    });
   });
   it("reports partial viewport params as invalid", () => {
     const result = parseBounds(new URLSearchParams("south=48.8&west=2.2"));

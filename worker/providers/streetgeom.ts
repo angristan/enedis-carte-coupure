@@ -1,40 +1,36 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import type { UpstreamError } from "./errors.js";
-import { type Bounds, boundsCacheKey, padded, snapped } from "./geo.js";
+import {
+  type UpstreamError,
+  UpstreamTransportError,
+} from "../domain/errors.js";
+import { type Bounds, boundsCacheKey, padded, snapped } from "../domain/geo.js";
 import {
   OverpassPayloadSchema,
   type StreetGeometry,
   type StreetGeometryResults,
   StreetGeometrySchema,
   type StreetRequest,
-} from "./models.js";
-import { KVStore, RawHttp } from "./platform.js";
+} from "../domain/models.js";
+import { RawHttp } from "../platform/http.js";
+import { KVStore } from "../platform/kv.js";
 import { filterStreetGeometryNearPoint } from "./streetgeom-geometry.js";
 import {
   buildStreetLookupQuery,
   streetGeometriesFromPayload,
   streetKey,
 } from "./streetgeom-overpass.js";
-import { uniqueSorted } from "./util.js";
-
-export const STREET_GEOMETRY_PRIMARY_ENDPOINT =
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter";
-export const STREET_GEOMETRY_FALLBACK_ENDPOINT =
-  "https://lz4.overpass-api.de/api/interpreter";
+import { sha256Hex, uniqueSorted } from "../domain/util.js";
+import {
+  STREET_GEOMETRY_FALLBACK_ENDPOINT,
+  STREET_GEOMETRY_PRIMARY_ENDPOINT,
+} from "../sources.js";
 
 export { streetKey } from "./streetgeom-overpass.js";
 
 const VIEWPORT_PADDING_RATIO = 0.08;
 const VIEWPORT_SNAP_GRID = 0.005;
-const INDEX_CACHE_TTL = 3600;
-const INDEX_TTL = 24 * 60 * 60;
-
-const DEFAULT_BOUNDS: Bounds = {
-  south: 48.815,
-  west: 2.224,
-  north: 48.902,
-  east: 2.47,
-};
+const BATCH_CACHE_TTL = 3600;
+const BATCH_TTL = 24 * 60 * 60;
 
 const BoundsSchema = Schema.Struct({
   south: Schema.Number,
@@ -43,21 +39,17 @@ const BoundsSchema = Schema.Struct({
   east: Schema.Number,
 });
 
-const IndexSchema = Schema.Struct({
-  version: Schema.Literal(4),
+const GeometryBatchSchema = Schema.Struct({
+  version: Schema.Literal(5),
   updatedAt: Schema.String,
-  source: Schema.String,
   bounds: BoundsSchema,
   streets: Schema.Record(Schema.String, StreetGeometrySchema),
 });
 
-type Index = Schema.Schema.Type<typeof IndexSchema>;
+type GeometryBatch = Schema.Schema.Type<typeof GeometryBatchSchema>;
 
 export class StreetGeometryProvider
   extends Context.Service<StreetGeometryProvider, {
-    readonly streetRequests: (
-      requests: ReadonlyArray<StreetRequest>,
-    ) => Effect.Effect<StreetGeometryResults, UpstreamError>;
     readonly streetRequestsInBounds: (
       requests: ReadonlyArray<StreetRequest>,
       bounds: Bounds,
@@ -74,6 +66,7 @@ export const StreetGeometryProviderLive = Layer.effect(StreetGeometryProvider)(
         endpoint: string,
         bounds: Bounds,
         nameKeys: ReadonlyArray<string>,
+        namesDigest: string,
       ) {
         const form = new URLSearchParams();
         form.set("data", buildStreetLookupQuery(bounds, nameKeys));
@@ -82,7 +75,8 @@ export const StreetGeometryProviderLive = Layer.effect(StreetGeometryProvider)(
           provider: "Overpass",
           operation: "streetgeom.lookup",
           url: endpoint,
-          dedupeKey: `${endpoint}:${boundsCacheKey(bounds)}:${nameKeys.join(",")}`,
+          dedupeKey:
+            `${endpoint}:${boundsCacheKey(bounds)}:${namesDigest}`,
           attributes: {
             "streetgeom.endpoint": endpoint,
             "streetgeom.names": nameKeys.length,
@@ -105,62 +99,80 @@ export const StreetGeometryProviderLive = Layer.effect(StreetGeometryProvider)(
     const fetchGeometry = (
       bounds: Bounds,
       nameKeys: ReadonlyArray<string>,
+      namesDigest: string,
     ): Effect.Effect<Readonly<Record<string, StreetGeometry>>, UpstreamError> =>
-      lookup(STREET_GEOMETRY_PRIMARY_ENDPOINT, bounds, nameKeys).pipe(
-        Effect.catch(() =>
-          lookup(STREET_GEOMETRY_FALLBACK_ENDPOINT, bounds, nameKeys)
+      lookup(
+        STREET_GEOMETRY_PRIMARY_ENDPOINT,
+        bounds,
+        nameKeys,
+        namesDigest,
+      ).pipe(
+        Effect.catch((error) =>
+          error._tag === "UpstreamStatusError" && error.status === 429
+            ? Effect.fail(error)
+            : lookup(
+              STREET_GEOMETRY_FALLBACK_ENDPOINT,
+              bounds,
+              nameKeys,
+              namesDigest,
+            )
         ),
       );
 
-    const forIndex = Effect.fn("StreetGeometry.forIndex")(
+    const forBatch = Effect.fn("StreetGeometry.forBatch")(
       function* (
         requests: ReadonlyArray<StreetRequest>,
         bounds: Bounds,
-        indexKey: string,
       ) {
         const requested = collectStreetRequests(requests);
         if (requested.size === 0) return {};
 
-        const cacheKey = `streetgeom:${indexKey}`;
+        const nameKeys = collectStreetKeys(requested);
+        const namesDigest = yield* sha256Hex(JSON.stringify(nameKeys)).pipe(
+          Effect.mapError((error) =>
+            UpstreamTransportError.make({
+              provider: "Overpass",
+              operation: "streetgeom.batch-key",
+              cause: error.cause,
+            })
+          ),
+        );
+        const cacheKey =
+          `streetgeom:batch:${boundsCacheKey(bounds)}:${namesDigest}`;
         const cached = yield* cache
-          .get(cacheKey, IndexSchema, INDEX_CACHE_TTL)
+          .get(cacheKey, GeometryBatchSchema, BATCH_CACHE_TTL)
           .pipe(
             Effect.catchTag("CacheError", () => Effect.succeed(null)),
           );
-        const missing = missingStreetKeys(requested, cached);
 
-        let index = cached ?? emptyIndex(bounds);
+        if (cached !== null) return geometryResults(requested, cached);
 
-        if (missing.length > 0) {
-          const geometries = yield* fetchGeometry(bounds, missing);
-          const now = yield* Clock.currentTimeMillis;
-          const updatedAt = new Date(now).toISOString();
+        const geometries = yield* fetchGeometry(bounds, nameKeys, namesDigest);
+        const now = yield* Clock.currentTimeMillis;
+        const batch = makeGeometryBatch(
+          bounds,
+          nameKeys,
+          geometries,
+          new Date(now).toISOString(),
+        );
 
-          index = updateIndex(index, bounds, missing, geometries, updatedAt);
+        yield* cache.set(cacheKey, batch, BATCH_TTL).pipe(
+          Effect.catchTag("CacheError", () => Effect.void),
+        );
 
-          yield* cache.set(cacheKey, index, INDEX_TTL).pipe(
-            Effect.catchTag("CacheError", () => Effect.void),
-          );
-        }
-
-        return geometryResults(requested, index);
+        return geometryResults(requested, batch);
       },
     );
 
     return {
-      streetRequests: (requests) => forIndex(requests, DEFAULT_BOUNDS, "paris"),
-      streetRequestsInBounds: (requests, bounds) => {
-        const indexBounds = snapped(
-          padded(bounds, VIEWPORT_PADDING_RATIO),
-          VIEWPORT_SNAP_GRID,
-        );
-
-        return forIndex(
+      streetRequestsInBounds: (requests, bounds) =>
+        forBatch(
           requests,
-          indexBounds,
-          `streets:${boundsCacheKey(indexBounds)}`,
-        );
-      },
+          snapped(
+            padded(bounds, VIEWPORT_PADDING_RATIO),
+            VIEWPORT_SNAP_GRID,
+          ),
+        ),
     };
   }),
 );
@@ -182,36 +194,23 @@ function collectStreetRequests(
   return requested;
 }
 
-function missingStreetKeys(
+function collectStreetKeys(
   requested: ReadonlyMap<string, StreetRequest>,
-  cached: Index | null,
 ): ReadonlyArray<string> {
   return uniqueSorted(
-    Array.from(requested.values(), (request) => streetKey(request.name))
-      .filter((key) => cached?.streets[key] === undefined),
+    Array.from(requested.values(), (request) => streetKey(request.name)),
   );
 }
 
-function emptyIndex(bounds: Bounds): Index {
-  return {
-    version: 4,
-    updatedAt: "",
-    source: "",
-    bounds,
-    streets: {},
-  };
-}
-
-function updateIndex(
-  current: Index,
+function makeGeometryBatch(
   bounds: Bounds,
-  missing: ReadonlyArray<string>,
+  nameKeys: ReadonlyArray<string>,
   geometries: Readonly<Record<string, StreetGeometry>>,
   updatedAt: string,
-): Index {
-  const streets: Record<string, StreetGeometry> = { ...current.streets };
+): GeometryBatch {
+  const streets: Record<string, StreetGeometry> = {};
 
-  for (const key of missing) {
+  for (const key of nameKeys) {
     streets[key] = geometries[key] ?? {
       status: "miss",
       query: key,
@@ -220,9 +219,8 @@ function updateIndex(
   }
 
   return {
-    version: 4,
+    version: 5,
     updatedAt,
-    source: STREET_GEOMETRY_PRIMARY_ENDPOINT,
     bounds,
     streets,
   };
@@ -230,15 +228,15 @@ function updateIndex(
 
 function geometryResults(
   requested: ReadonlyMap<string, StreetRequest>,
-  index: Index,
+  batch: GeometryBatch,
 ): StreetGeometryResults {
   const results: Record<string, StreetGeometry> = {};
 
   for (const [resultKey, request] of requested) {
-    const found = index.streets[streetKey(request.name)] ?? {
+    const found = batch.streets[streetKey(request.name)] ?? {
       status: "miss",
       query: request.name,
-      updatedAt: index.updatedAt,
+      updatedAt: batch.updatedAt,
     };
     const named: StreetGeometry = { ...found, query: request.name };
 

@@ -1,13 +1,11 @@
 import { Schema } from "effect";
-import { OutageResponseSchema } from "../shared/api.js";
+import { OutageResponseSchema } from "../../shared/api.js";
 import type {
-  Bounds,
   EnedisQuery,
-  OutageResponse,
   Position,
   PublicGeocode,
   StreetGeometry,
-} from "../shared/api.js";
+} from "../../shared/api.js";
 
 export {
   ApiErrorResponseSchema,
@@ -19,7 +17,7 @@ export {
   PublicGeocodeSchema,
   StreetGeometrySchema,
   StreetSchema,
-} from "../shared/api.js";
+} from "../../shared/api.js";
 
 export type {
   ApiErrorResponse,
@@ -35,18 +33,14 @@ export type {
   PublicGeocode,
   Street,
   StreetGeometry,
-} from "../shared/api.js";
+} from "../../shared/api.js";
 
-export const CoordinatesSchema = Schema.Tuple([Schema.Number, Schema.Number]);
+const CoordinatesSchema = Schema.Tuple([Schema.Number, Schema.Number]);
 
-export type Coordinates = Schema.Schema.Type<typeof CoordinatesSchema>;
-
-export const GeoJsonGeometrySchema = Schema.Struct({
+const GeoJsonGeometrySchema = Schema.Struct({
   type: Schema.String,
   coordinates: Schema.Unknown,
 });
-
-export type GeoJsonGeometry = Schema.Schema.Type<typeof GeoJsonGeometrySchema>;
 
 export const CommuneSchema = Schema.Struct({
   name: Schema.String,
@@ -63,7 +57,7 @@ export const CommuneSchema = Schema.Struct({
 
 export type Commune = Schema.Schema.Type<typeof CommuneSchema>;
 
-export const EnedisAddressSchema = Schema.Struct({
+const EnedisAddressSchema = Schema.Struct({
   localisation: Schema.optionalKey(Schema.String),
   nbFoyersCoupes: Schema.optionalKey(
     Schema.Union([Schema.String, Schema.Number]),
@@ -72,7 +66,7 @@ export const EnedisAddressSchema = Schema.Struct({
 
 export type EnedisAddress = Schema.Schema.Type<typeof EnedisAddressSchema>;
 
-export const EnedisOutageSchema = Schema.Struct({
+const EnedisOutageSchema = Schema.Struct({
   idCoupure: Schema.optionalKey(Schema.String),
   etatCoupure: Schema.optionalKey(Schema.String),
   incidentCoupure: Schema.optionalKey(Schema.String),
@@ -87,8 +81,6 @@ export const EnedisOutageSchema = Schema.Struct({
   ),
   listeAdresses: Schema.optionalKey(Schema.Array(EnedisAddressSchema)),
 });
-
-export type EnedisOutage = Schema.Schema.Type<typeof EnedisOutageSchema>;
 
 export const EnedisPayloadSchema = Schema.Struct({
   polygon: Schema.optionalKey(Schema.Unknown),
@@ -158,9 +150,5 @@ export const CommuneOutageCacheSchema = Schema.Struct({
   freshUntil: Schema.String,
   response: OutageResponseSchema,
 });
-
-export type CommuneOutageCacheEntry = Schema.Schema.Type<
-  typeof CommuneOutageCacheSchema
->;
 
 export { OutageResponseSchema };

@@ -1,38 +1,30 @@
 import { Clock, Context, Effect, Layer } from "effect";
-import type { UpstreamError } from "./errors.js";
-import type { Bounds } from "./geo.js";
-import { Geocoder, publicGeocode } from "./geocode.js";
+import type { UpstreamError } from "./domain/errors.js";
+import type { Bounds } from "./domain/geo.js";
+import { Geocoder, publicGeocode } from "./providers/geocode.js";
 import type {
-  EnedisQuery,
   NormalizeInput,
   OutageResponse,
   Street,
   StreetRequest,
-} from "./models.js";
+} from "./domain/models.js";
 import {
   normalizeOutageInputs,
   refreshStreetStats,
-} from "./outage-response.js";
-import { StreetGeometryProvider, streetKey } from "./streetgeom.js";
+} from "./domain/outage-response.js";
+import { StreetGeometryProvider, streetKey } from "./providers/streetgeom.js";
 
-export { mergeOutageResponses } from "./outage-merging.js";
-export { responseCommunes } from "./outage-response.js";
-export { normalizeStreet, parseLocalisation } from "./street-normalization.js";
+export { mergeOutageResponses } from "./domain/outage-merging.js";
+export { responseCommunes } from "./domain/outage-response.js";
+export { normalizeStreet, parseLocalisation } from "./domain/street-normalization.js";
 
 const MAX_GEOCODE_CONCURRENCY = 4;
 
 interface NormalizeOptions {
   readonly geocode: boolean;
-  readonly geometry: boolean;
-  readonly geometryBounds?: Bounds;
 }
 
 export class Normalizer extends Context.Service<Normalizer, {
-  readonly normalize: (
-    raw: NormalizeInput["raw"],
-    query: EnedisQuery,
-    geocode: boolean,
-  ) => Effect.Effect<OutageResponse, UpstreamError>;
   readonly normalizeSet: (
     inputs: ReadonlyArray<NormalizeInput>,
     options: NormalizeOptions,
@@ -48,15 +40,16 @@ export const NormalizerLive = Layer.effect(Normalizer)(Effect.gen(function* () {
   const geometries = yield* StreetGeometryProvider;
 
   const attachStreetGeometry = Effect.fn("Normalizer.attachStreetGeometry")(
-    function* (streets: ReadonlyArray<Street>, bounds?: Bounds) {
+    function* (streets: ReadonlyArray<Street>, bounds: Bounds) {
       if (streets.length === 0) {
         return streets;
       }
 
       const requests = streets.map(streetGeometryRequest);
-      const results = yield* (bounds === undefined
-        ? geometries.streetRequests(requests)
-        : geometries.streetRequestsInBounds(requests, bounds));
+      const results = yield* geometries.streetRequestsInBounds(
+        requests,
+        bounds,
+      );
 
       return streets.map((street) => {
         const geometry = results[street.key] ??
@@ -107,17 +100,7 @@ export const NormalizerLive = Layer.effect(Normalizer)(Effect.gen(function* () {
       }
 
       const geocodedStreets = yield* geocodeStreets(response.streets);
-      response = withStreets(response, geocodedStreets);
-
-      if (options.geometry) {
-        const streetsWithGeometry = yield* attachStreetGeometry(
-          geocodedStreets,
-          options.geometryBounds,
-        );
-        response = withStreets(response, streetsWithGeometry);
-      }
-
-      return response;
+      return withStreets(response, geocodedStreets);
     },
   );
 
@@ -129,12 +112,7 @@ export const NormalizerLive = Layer.effect(Normalizer)(Effect.gen(function* () {
     },
   );
 
-  return {
-    normalize: (raw, query, geocode) =>
-      normalizeSet([{ raw, query }], { geocode, geometry: geocode }),
-    normalizeSet,
-    attachGeometry,
-  };
+  return { normalizeSet, attachGeometry };
 }));
 
 function streetGeometryRequest(street: Street): StreetRequest {

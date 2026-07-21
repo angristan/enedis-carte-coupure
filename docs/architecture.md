@@ -49,10 +49,11 @@ Reusable operations use `Effect.fn`; sequential workflows use `Effect.gen`. Expe
 failures stay typed, and only the outer boundary handles defects as `500` responses.
 
 `RawHttp` serializes requests to a provider-specific `UpstreamCoordinator` Durable Object. The coordinator is the
-only component that calls external providers. It applies a persisted token bucket and concurrency cap, coalesces
-identical in-flight work, briefly reuses successful responses, aborts requests at a provider-specific deadline,
-and rejects oversized bodies. Coordinator failure never falls back to an unbudgeted direct request. `RawHttp`
-classifies the returned status, parses JSON as `unknown`, and Schema-decodes it.
+only component that calls external providers. It schedules requests through a bounded FIFO queue backed by a
+persisted token bucket and concurrency cap, coalesces identical in-flight work, and briefly reuses successful
+responses in a size- and entry-bounded memory cache. Provider origin and method allowlists, queue deadlines,
+fetch deadlines, and body limits fail closed. Coordinator failure never falls back to an unbudgeted direct request.
+`RawHttp` classifies the returned status, parses JSON as `unknown`, and Schema-decodes it.
 
 ## Viewport request flow
 
@@ -81,7 +82,8 @@ Protection is layered because browser-visible data cannot be made completely unh
 - managed Turnstile grants challenge clearance and creates a signed application session;
 - `/api/outages` accepts only bounded viewport pages of six communes;
 - opaque HMAC cursors prevent arbitrary offsets and bind pagination to one session and viewport;
-- the Workers Rate Limiting binding allows 60 outage pages per minute per verified session;
+- the Workers Rate Limiting binding allows approximately 60 outage pages per minute per verified session at each
+  Cloudflare location;
 - provider-specific Durable Object budgets cap global request rate and concurrency;
 - identical cold misses coalesce, response bodies and execution time are bounded, and stale KV facts remain usable;
 - `workers.dev` and preview URLs are disabled, so only the custom hostname serves the Worker.
@@ -115,7 +117,7 @@ already contains the new bounds.
 ## Geocoding and street geometry
 
 The geocoder tries GeoPF first and `api-adresse.data.gouv.fr` second. Successful results and misses are stored under
-per-query hashed keys; transient failures are not cached.
+bounded normalized query keys; transient failures are not cached.
 
 Street geometry is loaded from a primary and fallback Overpass endpoint. Queries are bounded, padded, snapped,
 and batched by street name. Same-name OSM geometry is split into connected components and filtered around the
@@ -125,14 +127,13 @@ geocoded point to avoid selecting a distant road with the same name.
 
 | Data | Key or strategy | Lifetime |
 | --- | --- | --- |
-| Legacy single-query response | Hashed `outages:*` entry, no longer publicly addressable | 15 minutes fresh; retained 7 days |
 | Per-commune outage fact | Hashed `commune-outages:*` entry with stale-while-revalidate | 15 minutes fresh; retained 7 days |
 | Snapped commune viewport | `communes:*` | 7 days |
-| Geocode result | Hashed `geocode:*` entry | 30 days |
-| Street geometry index | `streetgeom:streets:*` | 24 hours |
+| Geocode result | Normalized, bounded `geocode:*` entry | 30 days |
+| Immutable street-geometry batch | `streetgeom:batch:*`, hashed from snapped bounds and sorted street names | 24 hours |
 
-Stale response and commune entries schedule refreshes through `ctx.waitUntil()`. KV is a cache, not an authoritative
-store: reads may be eventually consistent and cache read/write failures do not fail otherwise valid upstream work.
+Stale commune entries schedule refreshes through `ctx.waitUntil()`. KV is a cache, not an authoritative store:
+reads may be eventually consistent and cache read/write failures do not fail otherwise valid upstream work.
 
 ## Frontend structure
 

@@ -1,8 +1,8 @@
 import { Schema } from "effect";
-import type { Bounds, Position } from "./geo.js";
-import { OverpassPayloadSchema, type StreetGeometry } from "./models.js";
-import { overpassBBox } from "./geo.js";
-import { stripAccents, uniqueSorted } from "./util.js";
+import type { Bounds, Position } from "../domain/geo.js";
+import { OverpassPayloadSchema, type StreetGeometry } from "../domain/models.js";
+import { overpassBBox } from "../domain/geo.js";
+import { stripAccents, uniqueSorted } from "../domain/util.js";
 
 const MAX_BATCH_SIZE = 36;
 

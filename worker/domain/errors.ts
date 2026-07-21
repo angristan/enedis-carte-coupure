@@ -19,6 +19,19 @@ export class TooManyCommunes
 export class MethodNotAllowed
   extends Schema.TaggedErrorClass<MethodNotAllowed>()("MethodNotAllowed", {
     method: Schema.String,
+    allow: Schema.String,
+    message: Schema.String,
+  }) {}
+
+export class RouteNotFound
+  extends Schema.TaggedErrorClass<RouteNotFound>()("RouteNotFound", {
+    path: Schema.String,
+    message: Schema.String,
+  }) {}
+
+export class PayloadTooLarge
+  extends Schema.TaggedErrorClass<PayloadTooLarge>()("PayloadTooLarge", {
+    maximumBytes: Schema.Number,
     message: Schema.String,
   }) {}
 
@@ -91,12 +104,6 @@ export class CacheError
     cause: Schema.Defect(),
   }) {}
 
-export class AllCommunesFailed
-  extends Schema.TaggedErrorClass<AllCommunesFailed>()("AllCommunesFailed", {
-    warnings: Schema.Array(Schema.String),
-    message: Schema.String,
-  }) {}
-
 export type UpstreamError =
   | UpstreamTransportError
   | UpstreamStatusError
@@ -106,13 +113,14 @@ export type RequestError =
   | ViewportTooLarge
   | TooManyCommunes
   | MethodNotAllowed
+  | RouteNotFound
+  | PayloadTooLarge
   | InvalidRequest
   | InvalidCursor
   | CursorExpired
   | VerificationRequired
   | VerificationFailed
   | RateLimitExceeded
-  | AllCommunesFailed
   | UpstreamError;
 
 export function errorMessage(error: UpstreamError | CacheError): string {

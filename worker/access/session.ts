@@ -1,13 +1,14 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
-import type { SessionStatus } from "../shared/api.js";
+import type { SessionStatus } from "../../shared/api.js";
 import {
   RateLimitExceeded,
   VerificationFailed,
   VerificationRequired,
-} from "./errors.js";
-import { RawHttp, WorkerConfig, type WorkerEnv } from "./platform.js";
+} from "../domain/errors.js";
+import { WorkerConfig, type WorkerEnv } from "../platform/config.js";
+import { RawHttp } from "../platform/http.js";
 import { signJson, verifyJson } from "./signing.js";
-import { CryptoError } from "./util.js";
+import { CryptoError } from "../domain/util.js";
 
 const TURNSTILE_VERIFY_ENDPOINT =
   "https://challenges.cloudflare.com/turnstile/v0/siteverify";
@@ -44,6 +45,9 @@ export interface CreatedSession {
 
 export class AccessControl extends Context.Service<AccessControl, {
   readonly status: (request: Request) => Effect.Effect<SessionStatus, CryptoError>;
+  readonly validateCreationRequest: (
+    request: Request,
+  ) => Effect.Effect<void, VerificationFailed>;
   readonly create: (
     request: Request,
     token: string,
@@ -92,15 +96,21 @@ export function accessControlLayer(env: WorkerEnv) {
       } satisfies SessionStatus;
     });
 
-    const create = Effect.fn("AccessControl.create")(function* (
-      request: Request,
-      token: string,
-    ) {
+    const validateCreationRequest = Effect.fn(
+      "AccessControl.validateCreationRequest",
+    )(function* (request: Request) {
       if (request.headers.get("Origin") !== config.appOrigin) {
         return yield* VerificationFailed.make({
           message: "session origin is not allowed",
         });
       }
+    });
+
+    const create = Effect.fn("AccessControl.create")(function* (
+      request: Request,
+      token: string,
+    ) {
+      yield* validateCreationRequest(request);
       if (token.length === 0 || token.length > 2048) {
         return yield* VerificationFailed.make({
           message: "Turnstile token is invalid",
@@ -186,18 +196,24 @@ export function accessControlLayer(env: WorkerEnv) {
       session: VerifiedSession,
     ) {
       if (rateLimiter === undefined) return;
-      const outcome = yield* Effect.promise(() =>
-        rateLimiter.limit({ key: session.id })
-      );
-      if (!outcome.success) {
-        return yield* RateLimitExceeded.make({
-          retryAfter: RATE_LIMIT_RETRY_AFTER,
-          message: "too many outage requests",
-        });
-      }
+      const exceeded = () => RateLimitExceeded.make({
+        retryAfter: RATE_LIMIT_RETRY_AFTER,
+        message: "too many outage requests",
+      });
+      const outcome = yield* Effect.tryPromise({
+        try: () => rateLimiter.limit({ key: session.id }),
+        catch: exceeded,
+      });
+      if (!outcome.success) return yield* exceeded();
     });
 
-    return { status, create, require: requireSession, limit };
+    return {
+      status,
+      validateCreationRequest,
+      create,
+      require: requireSession,
+      limit,
+    };
   }));
 }
 

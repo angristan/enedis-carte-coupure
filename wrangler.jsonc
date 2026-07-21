@@ -25,7 +25,7 @@
   },
   "limits": {
     "cpu_ms": 1000,
-    "subrequests": 150
+    "subrequests": 500
   },
   "vars": {
     "CACHE_PREFIX": "enedis-carte-coupure",

@@ -1,6 +1,6 @@
 import { Clock, Effect, Layer, Schema } from "effect";
-import { CacheError } from "./errors.js";
-import { KVStore } from "./platform.js";
+import { CacheError } from "../domain/errors.js";
+import { KVStore } from "./kv.js";
 
 interface MemoryEntry {
   readonly value: unknown;

@@ -1,9 +1,9 @@
 import { Effect, Option, Schema } from "effect";
-import type { Bounds } from "./geo.js";
-import { boundsCacheKey } from "./geo.js";
-import { CursorExpired, InvalidCursor } from "./errors.js";
+import type { Bounds } from "../domain/geo.js";
+import { boundsCacheKey } from "../domain/geo.js";
+import { CursorExpired, InvalidCursor } from "../domain/errors.js";
 import { signJson, verifyJson } from "./signing.js";
-import { sha256Hex } from "./util.js";
+import { sha256Hex } from "../domain/util.js";
 
 export const COMMUNE_PAGE_SIZE = 6;
 const MAX_CURSOR_LENGTH = 2048;

@@ -126,8 +126,10 @@ otherwise the page remains successful with warnings so pagination can continue.
 | `400` | `INVALID_REQUEST`, `INVALID_VIEWPORT`, `VIEWPORT_TOO_LARGE`, `TOO_MANY_COMMUNES`, or `INVALID_CURSOR` |
 | `401` | `VERIFICATION_REQUIRED` |
 | `403` | `VERIFICATION_FAILED` |
-| `405` | `METHOD_NOT_ALLOWED` |
+| `404` | `NOT_FOUND` for an unknown `/api/*` route |
+| `405` | `METHOD_NOT_ALLOWED`, with `Allow` |
 | `410` | `CURSOR_EXPIRED`; restart pagination from the first page |
+| `413` | `PAYLOAD_TOO_LARGE` for an oversized session request |
 | `429` | `RATE_LIMITED`, with `Retry-After` |
 | `502` | A non-degradable upstream transport, status, or decode failure |
 | `500` | Internal cryptographic or Worker failure |

@@ -1,44 +1,41 @@
 import { Clock, Context, Effect, Layer } from "effect";
-import { errorMessage, type RequestError } from "./errors.js";
+import { errorMessage, type RequestError } from "./domain/errors.js";
 import {
   boundsForCommune,
   CommuneDirectory,
   enedisQueryForCommune,
-} from "./communes.js";
-import { Enedis } from "./enedis.js";
-import type { Bounds } from "./geo.js";
+} from "./providers/communes.js";
+import { Enedis } from "./providers/enedis.js";
+import type { Bounds } from "./domain/geo.js";
 import {
   type Commune,
   CommuneOutageCacheSchema,
   type OutageResponse,
-} from "./models.js";
+} from "./domain/models.js";
 import {
   mergeOutageResponses,
   Normalizer,
   responseCommunes,
-} from "./outages.js";
-import { BackgroundTasks, KVStore, WorkerConfig } from "./platform.js";
+} from "./normalizer.js";
+import { WorkerConfig } from "./platform/config.js";
+import { BackgroundTasks } from "./platform/context.js";
+import { KVStore } from "./platform/kv.js";
 import {
   COMMUNE_PAGE_SIZE,
   nextPageCursor,
   pagePosition,
   sessionTag,
-} from "./cursor.js";
-import { type CryptoError, sha256Hex } from "./util.js";
+} from "./access/cursor.js";
+import { type CryptoError, sha256Hex } from "./domain/util.js";
 
 export interface OutageResult {
   readonly response: OutageResponse;
-  readonly cache: "HIT" | "STALE" | "MISS";
-  readonly refreshedAt?: string;
-  readonly freshUntil?: string;
-  readonly communeStats?: {
+  readonly communeStats: {
     readonly hits: number;
     readonly stale: number;
     readonly misses: number;
   };
 }
-
-type Result = OutageResult;
 type ServiceError = RequestError | CryptoError;
 
 type CommuneResult = {
@@ -74,7 +71,6 @@ export const OutageServiceLive = Layer.effect(OutageService)(
         const raw = yield* enedis.fetch(query);
         let response = yield* normalizer.normalizeSet([{ raw, query }], {
           geocode: true,
-          geometry: false,
         });
         const geometryBounds = boundsForCommune(commune, fallbackBounds);
         if (geometryBounds !== undefined) {
@@ -197,9 +193,9 @@ export const OutageServiceLive = Layer.effect(OutageService)(
             readonly cache: "HIT" | "STALE" | "MISS";
           }
         > = [];
-        const warnings: Array<string> = [];
+        const failedCommuneWarnings: Array<string> = [];
         for (const item of results) {
-          if ("warning" in item) warnings.push(item.warning);
+          if ("warning" in item) failedCommuneWarnings.push(item.warning);
           else successes.push(item);
         }
         const merged = mergeOutageResponses(
@@ -211,24 +207,27 @@ export const OutageServiceLive = Layer.effect(OutageService)(
           position.expiresAt,
           cursorContext,
         );
+        const pageWarnings = Array.from(new Set([
+          ...(merged.warnings ?? []),
+          ...failedCommuneWarnings,
+        ]));
         const response: OutageResponse = {
           ...merged,
           viewport: bounds,
           communes: responseCommunes(selected),
           communeTotal: visible.length,
           ...(nextCursor === undefined ? {} : { nextCursor }),
-          warnings,
+          ...(pageWarnings.length === 0 ? {} : { warnings: pageWarnings }),
         };
         return {
           response,
-          cache: "MISS",
           communeStats: {
             hits: successes.filter((item) => item.cache === "HIT").length,
             stale: successes.filter((item) => item.cache === "STALE").length,
-            misses: warnings.length +
+            misses: failedCommuneWarnings.length +
               successes.filter((item) => item.cache === "MISS").length,
           },
-        } satisfies Result;
+        } satisfies OutageResult;
       },
     );
 

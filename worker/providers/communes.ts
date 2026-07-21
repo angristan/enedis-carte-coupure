@@ -1,17 +1,17 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import { TooManyCommunes, type UpstreamError } from "./errors.js";
+import { TooManyCommunes, type UpstreamError } from "../domain/errors.js";
 import {
   type Bounds,
   boundsCacheKey,
   boundsFromGeoJSONGeometry,
   padded,
   snapped,
-} from "./geo.js";
-import { type Commune, CommuneSchema, type EnedisQuery } from "./models.js";
-import { KVStore, RawHttp, WorkerConfig } from "./platform.js";
-
-export const COMMUNES_ENDPOINT =
-  "https://apicarto.ign.fr/api/limites-administratives/commune";
+} from "../domain/geo.js";
+import { type Commune, CommuneSchema, type EnedisQuery } from "../domain/models.js";
+import { WorkerConfig } from "../platform/config.js";
+import { RawHttp } from "../platform/http.js";
+import { KVStore } from "../platform/kv.js";
+import { COMMUNES_ENDPOINT } from "../sources.js";
 const VIEWPORT_GRID = 0.0001;
 const GEOMETRY_PADDING_RATIO = 0.04;
 const API_CARTO_MAXIMUM = 500;

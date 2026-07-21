@@ -6,8 +6,10 @@ import {
   CommuneDirectoryLive,
   enedisQueryForCommune,
 } from "./communes.js";
-import type { Commune } from "./models.js";
-import { KVStore, RawHttp, WorkerConfig } from "./platform.js";
+import type { Commune } from "../domain/models.js";
+import { WorkerConfig } from "../platform/config.js";
+import { RawHttp } from "../platform/http.js";
+import { KVStore } from "../platform/kv.js";
 
 const requestedUrls: Array<string> = [];
 const intersectionResponse = {

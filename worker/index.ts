@@ -6,39 +6,43 @@ import {
   SessionVerificationRequestSchema,
 } from "../shared/api.js";
 import { viewportIsWithinLimits } from "../shared/viewport.js";
-import { CommuneDirectoryLive } from "./communes.js";
-import { EnedisLive } from "./enedis.js";
-import type { RequestError } from "./errors.js";
+import { CommuneDirectoryLive } from "./providers/communes.js";
+import { EnedisLive } from "./providers/enedis.js";
+import type { RequestError } from "./domain/errors.js";
 import {
   InvalidRequest,
   InvalidViewport,
   MethodNotAllowed,
+  PayloadTooLarge,
+  RouteNotFound,
   ViewportTooLarge,
-} from "./errors.js";
-import { parseBounds } from "./geo.js";
-import { GeocoderLive } from "./geocode.js";
-import { NormalizerLive } from "./outages.js";
+} from "./domain/errors.js";
+import { parseBounds } from "./domain/geo.js";
+import { GeocoderLive } from "./providers/geocode.js";
+import { NormalizerLive } from "./normalizer.js";
 import {
-  BackgroundTasks,
-  backgroundTasksLayer,
   configLayer,
-  kvStoreLayer,
-  RawHttpLive,
-  requestContextLayer,
-  upstreamCoordinatorLayer,
-  WorkerConfig,
   type WorkerEnv,
-} from "./platform.js";
+} from "./platform/config.js";
+import {
+  backgroundTasksLayer,
+  requestContextLayer,
+} from "./platform/context.js";
+import {
+  RawHttpLive,
+  upstreamCoordinatorLayer,
+} from "./platform/http.js";
+import { kvStoreLayer } from "./platform/kv.js";
 import {
   type OutageResult,
   OutageService,
   OutageServiceLive,
 } from "./service.js";
-import { AccessControl, accessControlLayer } from "./session.js";
-import { StreetGeometryProviderLive } from "./streetgeom.js";
-import type { CryptoError } from "./util.js";
+import { AccessControl, accessControlLayer } from "./access/session.js";
+import { StreetGeometryProviderLive } from "./providers/streetgeom.js";
+import type { CryptoError } from "./domain/util.js";
 
-export { UpstreamCoordinator } from "./upstream-coordinator.js";
+export { UpstreamCoordinator } from "./platform/upstream-coordinator.js";
 
 type HandlerError = RequestError | CryptoError;
 
@@ -71,10 +75,20 @@ function appLayer(env: WorkerEnv, context: ExecutionContext) {
 
 const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
   const url = new URL(request.url);
-  if (url.pathname === "/api/health") return json({ ok: true });
 
-  const access = yield* AccessControl;
+  if (url.pathname === "/api/health") {
+    if (request.method !== "GET") {
+      return yield* MethodNotAllowed.make({
+        method: request.method,
+        allow: "GET",
+        message: "method not allowed",
+      });
+    }
+    return json({ ok: true });
+  }
+
   if (url.pathname === "/api/session") {
+    const access = yield* AccessControl;
     if (request.method === "GET") {
       const status = yield* access.status(request);
       const encoded = yield* Schema.encodeUnknownEffect(SessionStatusSchema)(
@@ -83,6 +97,7 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
       return json(encoded);
     }
     if (request.method === "POST") {
+      yield* access.validateCreationRequest(request);
       const payload = yield* decodeJsonRequest(
         request,
         SessionVerificationRequestSchema,
@@ -94,17 +109,29 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
     }
     return yield* MethodNotAllowed.make({
       method: request.method,
+      allow: "GET, POST",
       message: "method not allowed",
     });
   }
 
-  if (url.pathname !== "/api/outages") return null;
+  if (url.pathname !== "/api/outages") {
+    if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+      return yield* RouteNotFound.make({
+        path: url.pathname,
+        message: "API route not found",
+      });
+    }
+    return null;
+  }
   if (request.method !== "GET") {
     return yield* MethodNotAllowed.make({
       method: request.method,
+      allow: "GET",
       message: "method not allowed",
     });
   }
+
+  const access = yield* AccessControl;
   const invalidParameter = invalidOutageParameter(url.searchParams);
   if (invalidParameter !== undefined) {
     return yield* InvalidRequest.make({ message: invalidParameter });
@@ -143,22 +170,7 @@ const handleApi = Effect.fn("Worker.handleApi")(function* (request: Request) {
 });
 
 function setCacheHeaders(response: Response, result: OutageResult): void {
-  response.headers.set(
-    "X-App-Cache",
-    result.communeStats === undefined ? result.cache : "COMMUNE",
-  );
-
-  if (result.refreshedAt !== undefined) {
-    response.headers.set("X-App-Cache-Refreshed-At", result.refreshedAt);
-  }
-  if (result.freshUntil !== undefined) {
-    response.headers.set("X-App-Cache-Fresh-Until", result.freshUntil);
-  }
-  if (result.cache === "STALE") {
-    response.headers.set("X-App-Cache-Refresh", "background");
-  }
-  if (result.communeStats === undefined) return;
-
+  response.headers.set("X-App-Cache", "COMMUNE");
   response.headers.set(
     "X-App-Cache-Commune-Hits",
     String(result.communeStats.hits),
@@ -181,8 +193,15 @@ function errorResponse(error: HandlerError): Response {
       return apiError("VIEWPORT_TOO_LARGE", error.message, 400);
     case "TooManyCommunes":
       return apiError("TOO_MANY_COMMUNES", error.message, 400);
-    case "MethodNotAllowed":
-      return apiError("METHOD_NOT_ALLOWED", error.message, 405);
+    case "MethodNotAllowed": {
+      const response = apiError("METHOD_NOT_ALLOWED", error.message, 405);
+      response.headers.set("Allow", error.allow);
+      return response;
+    }
+    case "RouteNotFound":
+      return apiError("NOT_FOUND", error.message, 404);
+    case "PayloadTooLarge":
+      return apiError("PAYLOAD_TOO_LARGE", error.message, 413);
     case "InvalidRequest":
       return apiError("INVALID_REQUEST", error.message, 400);
     case "InvalidCursor":
@@ -198,13 +217,6 @@ function errorResponse(error: HandlerError): Response {
       response.headers.set("Retry-After", String(error.retryAfter));
       return response;
     }
-    case "AllCommunesFailed":
-      return apiError(
-        "ENEDIS_FETCH_FAILED",
-        error.message,
-        502,
-        error.warnings,
-      );
     case "UpstreamTransportError":
       return apiError(
         "UPSTREAM_TRANSPORT_ERROR",
@@ -276,12 +288,10 @@ function apiError(
   error: string,
   message: string,
   status: number,
-  warnings?: ReadonlyArray<string>,
 ): Response {
   const body = Schema.encodeUnknownSync(ApiErrorResponseSchema)({
     error,
     message,
-    ...(warnings === undefined ? {} : { warnings }),
   });
   return json(body, status);
 }
@@ -302,13 +312,35 @@ function invalidOutageParameter(values: URLSearchParams): string | undefined {
   return undefined;
 }
 
+const MAX_JSON_REQUEST_BYTES = 4 * 1024;
+
 const decodeJsonRequest = Effect.fn("Worker.decodeJsonRequest")(
   function* <A>(
     request: Request,
     schema: Schema.ConstraintDecoder<A, never>,
   ) {
-    const unknownJson = yield* Effect.tryPromise({
-      try: () => request.json(),
+    const contentLength = request.headers.get("Content-Length");
+    if (
+      contentLength !== null &&
+      Number.isFinite(Number(contentLength)) &&
+      Number(contentLength) > MAX_JSON_REQUEST_BYTES
+    ) {
+      return yield* PayloadTooLarge.make({
+        maximumBytes: MAX_JSON_REQUEST_BYTES,
+        message: "request body is too large",
+      });
+    }
+
+    const body = yield* readLimitedBody(request, MAX_JSON_REQUEST_BYTES);
+    if (body.tooLarge) {
+      return yield* PayloadTooLarge.make({
+        maximumBytes: MAX_JSON_REQUEST_BYTES,
+        message: "request body is too large",
+      });
+    }
+
+    const unknownJson = yield* Effect.try({
+      try: (): unknown => JSON.parse(body.text),
       catch: () => InvalidRequest.make({ message: "invalid JSON request" }),
     });
     return yield* Schema.decodeUnknownEffect(schema)(unknownJson).pipe(
@@ -319,4 +351,52 @@ const decodeJsonRequest = Effect.fn("Worker.decodeJsonRequest")(
   },
 );
 
-export const testExports = { errorResponse, invalidOutageParameter };
+type LimitedBody =
+  | { readonly tooLarge: false; readonly text: string }
+  | { readonly tooLarge: true };
+
+function readLimitedBody(
+  request: Request,
+  maximumBytes: number,
+): Effect.Effect<LimitedBody, InvalidRequest> {
+  return Effect.tryPromise({
+    try: async (): Promise<LimitedBody> => {
+      if (request.body === null) {
+        return { tooLarge: false, text: "" };
+      }
+
+      const reader = request.body.getReader();
+      const decoder = new TextDecoder();
+      let size = 0;
+      let text = "";
+
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          return {
+            tooLarge: false,
+            text: text + decoder.decode(),
+          };
+        }
+
+        size += chunk.value.byteLength;
+        if (size > maximumBytes) {
+          try {
+            await reader.cancel();
+          } catch {
+            // The size violation remains authoritative if cancellation fails.
+          }
+          return { tooLarge: true };
+        }
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    catch: () => InvalidRequest.make({ message: "could not read request body" }),
+  });
+}
+
+export const testExports = {
+  errorResponse,
+  handleApi,
+  invalidOutageParameter,
+};
