@@ -5,6 +5,7 @@
 .wrangler/
 **/.wrangler/
 .dev.vars*
+!.dev.vars.example
 bin/
 cache/*.json
 coverage.out

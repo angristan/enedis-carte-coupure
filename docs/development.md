@@ -12,14 +12,7 @@ required.
 
 ```sh
 bun install --frozen-lockfile
-cat > .dev.vars <<'EOF'
-APP_ENV=development
-APP_ORIGIN=http://127.0.0.1:5173
-TURNSTILE_SITE_KEY=1x00000000000000000000AA
-TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
-SESSION_SIGNING_SECRET=local-session-signing-secret-at-least-32-bytes
-CURSOR_SIGNING_SECRET=local-cursor-signing-secret-at-least-32-bytes
-EOF
+cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
@@ -63,8 +56,8 @@ The committed defaults live in `wrangler.jsonc`:
 
 Duration values accept `ms`, `s`, `m`, `h`, or `d`. Invalid values fall back to the defaults in the Worker.
 
-Local development variables belong in `.dev.vars` or `.dev.vars.*`; those files are ignored. Do not commit tokens
-or secrets.
+Local development variables belong in `.dev.vars` or `.dev.vars.*`; those files are ignored except for the safe
+`.dev.vars.example` template. Do not commit real tokens or secrets.
 
 ## Build output
 
