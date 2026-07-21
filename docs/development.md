@@ -65,7 +65,7 @@ Local development variables belong in `.dev.vars` or `.dev.vars.*`; those files 
 
 ```text
 web/client/                     React static assets
-web/enedis_carte_coupure/      Worker bundle and generated Wrangler config
+web/enedis/                    Worker bundle and generated Wrangler config
 ```
 
 The deployment script uses the generated Worker configuration because the Cloudflare Vite plugin adds the static

@@ -9,7 +9,7 @@
     "build": "bun run test && bun run typecheck && vite build",
     "build:redirect": "tsc --project tsconfig.redirect.json",
     "preview": "vite preview --host 127.0.0.1",
-    "deploy": "bun run build && wrangler deploy --config web/enedis_carte_coupure/wrangler.json",
+    "deploy": "bun run build && wrangler deploy --config web/enedis/wrangler.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

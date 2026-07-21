@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "enedis-carte-coupure",
+  "name": "enedis",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-07-07",
   "workers_dev": false,

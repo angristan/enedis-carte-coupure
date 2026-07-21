@@ -3,6 +3,7 @@
 ## Production endpoints
 
 - Primary: [https://enedis.stanislas.cloud](https://enedis.stanislas.cloud)
+- Cloudflare Worker: `enedis`
 - Direct `workers.dev` and version preview URLs: disabled
 - Legacy Railway URL: `https://enedis-carte-coupure.up.railway.app`
 
@@ -26,7 +27,7 @@ bun run deploy
 ```
 
 The deploy script rebuilds the project and publishes the generated configuration at
-`web/enedis_carte_coupure/wrangler.json`. Production requires the `TURNSTILE_SECRET_KEY`,
+`web/enedis/wrangler.json`. Production requires the `TURNSTILE_SECRET_KEY`,
 `SESSION_SIGNING_SECRET`, and `CURSOR_SIGNING_SECRET` Worker secrets. Never reuse the session and cursor signing
 values.
 
@@ -83,13 +84,13 @@ window, its Redis service can be removed after that window closes.
 List recent Worker deployments:
 
 ```sh
-bunx wrangler deployments list --name enedis-carte-coupure
+bunx wrangler deployments list --name enedis
 ```
 
 Roll back to a known-good Worker version:
 
 ```sh
-bunx wrangler rollback <version-id> --name enedis-carte-coupure
+bunx wrangler rollback <version-id> --name enedis
 ```
 
 Confirm the primary domain and both API endpoints after the rollback. The Custom Domain is attached to the Worker,
