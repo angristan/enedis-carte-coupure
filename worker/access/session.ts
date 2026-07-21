@@ -145,6 +145,10 @@ export function accessControlLayer(env: WorkerEnv) {
           console.warn({
             event: "turnstile.siteverify_unavailable",
             errorTag: error._tag,
+            errorMessage: error._tag === "UpstreamTransportError" &&
+                error.cause instanceof Error
+              ? error.cause.message
+              : undefined,
           });
           return VerificationFailed.make({
             message: "Turnstile verification failed",
