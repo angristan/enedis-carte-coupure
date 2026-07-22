@@ -81,8 +81,8 @@ const requestJson = Effect.fn("OutageApi.requestJson")(
       });
       const decoded = decodeApiError(payload);
       const message = Option.isSome(decoded)
-        ? decoded.value.message
-        : `HTTP ${response.status}`;
+        ? localizedApiError(decoded.value.error, response.status)
+        : localizedHttpError(response.status);
       return yield* ApiStatusError.make({ status: response.status, message });
     }
 
@@ -142,6 +142,49 @@ export const verifyTurnstile = Effect.fn("OutageApi.verifyTurnstile")(
     );
   },
 );
+
+function localizedApiError(error: string, status: number): string {
+  switch (error) {
+    case "INVALID_VIEWPORT":
+      return "La zone affichée est invalide.";
+    case "VIEWPORT_TOO_LARGE":
+      return "Zoomez davantage pour afficher les coupures.";
+    case "TOO_MANY_COMMUNES":
+      return "La zone affichée contient trop de communes. Zoomez davantage.";
+    case "METHOD_NOT_ALLOWED":
+      return "Cette action n'est pas autorisée.";
+    case "NOT_FOUND":
+      return "Le service demandé est introuvable.";
+    case "PAYLOAD_TOO_LARGE":
+      return "La requête envoyée est trop volumineuse.";
+    case "INVALID_REQUEST":
+      return "La requête envoyée est invalide.";
+    case "INVALID_CURSOR":
+      return "La pagination des résultats est invalide. Rechargez la carte.";
+    case "CURSOR_EXPIRED":
+      return "Les résultats ont expiré. Rechargez la carte.";
+    case "VERIFICATION_REQUIRED":
+      return "Une vérification humaine est requise.";
+    case "VERIFICATION_FAILED":
+      return "La vérification humaine a échoué. Réessayez.";
+    case "RATE_LIMITED":
+      return "Trop de requêtes ont été envoyées. Patientez un instant avant de réessayer.";
+    case "UPSTREAM_TRANSPORT_ERROR":
+      return "Un service de données est temporairement inaccessible.";
+    case "UPSTREAM_STATUS_ERROR":
+      return "Un service de données est temporairement indisponible.";
+    case "UPSTREAM_DECODE_ERROR":
+      return "Un service de données a renvoyé une réponse invalide.";
+    case "INTERNAL_ERROR":
+      return "Une erreur interne est survenue. Réessayez plus tard.";
+    default:
+      return localizedHttpError(status);
+  }
+}
+
+function localizedHttpError(status: number): string {
+  return `La requête a échoué (HTTP ${status}).`;
+}
 
 export function runOutageRequest(
   request: ViewportRequest,

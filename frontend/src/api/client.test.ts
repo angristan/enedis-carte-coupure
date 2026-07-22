@@ -121,18 +121,19 @@ describe("outage API client", () => {
       assert.include(error.message, "invalide");
     }));
 
-  it.effect("preserves the API message for non-success statuses", () =>
-    Effect.gen(function* () {
+  it.effect(
+    "translates stable API error codes instead of exposing messages",
+    () => Effect.gen(function* () {
       vi.stubGlobal(
         "fetch",
         vi.fn((): Promise<Response> =>
           Promise.resolve(
             new Response(
               JSON.stringify({
-                error: "VIEWPORT_TOO_LARGE",
-                message: "Zoomez davantage.",
+                error: "RATE_LIMITED",
+                message: "too many outage requests",
               }),
-              { status: 400 },
+              { status: 429 },
             ),
           )
         ),
@@ -141,8 +142,36 @@ describe("outage API client", () => {
       const error = yield* Effect.flip(fetchOutages(request));
       assert.strictEqual(error._tag, "ApiStatusError");
       if (error._tag === "ApiStatusError") {
-        assert.strictEqual(error.status, 400);
-        assert.strictEqual(error.message, "Zoomez davantage.");
+        assert.strictEqual(error.status, 429);
+        assert.strictEqual(
+          error.message,
+          "Trop de requêtes ont été envoyées. Patientez un instant avant de réessayer.",
+        );
+      }
+    }),
+  );
+
+  it.effect("uses a localized fallback for unknown API errors", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((): Promise<Response> =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: "FUTURE_ERROR",
+                message: "untranslated internal detail",
+              }),
+              { status: 503 },
+            ),
+          )
+        ),
+      );
+
+      const error = yield* Effect.flip(fetchOutages(request));
+      assert.strictEqual(error._tag, "ApiStatusError");
+      if (error._tag === "ApiStatusError") {
+        assert.strictEqual(error.message, "La requête a échoué (HTTP 503).");
       }
     }));
 });
