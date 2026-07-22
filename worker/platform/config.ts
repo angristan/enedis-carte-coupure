@@ -1,24 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
-export interface WorkerEnv {
-  readonly ASSETS: Fetcher;
-  readonly CACHE?: KVNamespace;
-  readonly API_RATE_LIMITER?: RateLimit;
-  readonly UPSTREAM_COORDINATOR?: DurableObjectNamespace;
-  readonly CACHE_PREFIX?: string;
-  readonly OUTAGE_CACHE_TTL?: string;
-  readonly OUTAGE_CACHE_STALE_TTL?: string;
-  readonly COMMUNES_CACHE_TTL?: string;
-  readonly APP_ENV?: string;
-  readonly APP_ORIGIN?: string;
-  readonly TURNSTILE_SITE_KEY?: string;
-  readonly TURNSTILE_SECRET_KEY?: string;
-  readonly TURNSTILE_HOSTNAME?: string;
-  readonly SESSION_SIGNING_SECRET?: string;
-  readonly CURSOR_SIGNING_SECRET?: string;
-  readonly SESSION_TTL?: string;
-  readonly CURSOR_TTL?: string;
-}
+export type WorkerEnv = Pick<Env, "ASSETS"> & Partial<Omit<Env, "ASSETS">>;
 
 export class WorkerConfig extends Context.Service<WorkerConfig, {
   readonly cachePrefix: string;

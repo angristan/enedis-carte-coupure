@@ -1,8 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { CacheError } from "../domain/errors.js";
 import { WorkerConfig } from "./config.js";
-import { RequestContext } from "./context.js";
-import { tracedPromise } from "./trace.js";
 
 export class KVStore extends Context.Service<KVStore, {
   readonly get: <A>(
@@ -20,7 +18,6 @@ export class KVStore extends Context.Service<KVStore, {
 export function kvStoreLayer(namespace: KVNamespace | undefined) {
   return Layer.effect(KVStore)(Effect.gen(function* () {
     const config = yield* WorkerConfig;
-    const requestContext = yield* RequestContext;
 
     const fullKey = (key: string): string =>
       config.cachePrefix ? `${config.cachePrefix}:${key}` : key;
@@ -35,13 +32,10 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         const storageKey = fullKey(key);
         const value = yield* Effect.tryPromise({
           try: () =>
-            tracedPromise(requestContext.trace, "cache.get", {
-              "cache.key": key,
-            }, () =>
-              namespace.get(storageKey, {
-                type: "json",
-                cacheTtl: Math.max(60, cacheTtl),
-              })),
+            namespace.get(storageKey, {
+              type: "json",
+              cacheTtl: Math.max(60, cacheTtl),
+            }),
           catch: (cause) => CacheError.make({ operation: "get", key, cause }),
         });
         if (value === null) return null;
@@ -67,10 +61,7 @@ export function kvStoreLayer(namespace: KVNamespace | undefined) {
         }
 
         yield* Effect.tryPromise({
-          try: () =>
-            tracedPromise(requestContext.trace, "cache.put", {
-              "cache.key": key,
-            }, () => namespace.put(storageKey, JSON.stringify(value), options)),
+          try: () => namespace.put(storageKey, JSON.stringify(value), options),
           catch: (cause) => CacheError.make({ operation: "set", key, cause }),
         });
       },

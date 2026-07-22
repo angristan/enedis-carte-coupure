@@ -41,7 +41,7 @@ The Worker deployment includes:
   location;
 - the managed pre-clearance Turnstile widget for `enedis.stanislas.cloud`;
 - the `enedis.stanislas.cloud` Custom Domain;
-- sampled Workers observability and application traces.
+- full Workers observability and application traces.
 
 `workers_dev` and preview URLs are disabled. Cloudflare WAF rate limiting is not configured.
 
@@ -115,7 +115,7 @@ occasional repeated upstream work after a cold deployment is expected.
 
 ## Tracing
 
-Workers observability is sampled in `wrangler.jsonc`. Provider and cache adapters retain named Effect operations:
+Workers observability uses full (`1.0`) head sampling for logs and traces in `wrangler.jsonc`. Provider and cache adapters retain named Effect operations:
 
 - `cache.get` and `cache.put`
 - `upstream.request`
@@ -124,9 +124,9 @@ Workers observability is sampled in `wrangler.jsonc`. Provider and cache adapter
 - `Geocoder.lookup`
 - `StreetGeometry.lookup`
 
-Useful bounded attributes include provider names, commune coordinates, street-name batch sizes, cache keys, and
-`http.response.status_code`. Cloudflare also creates platform spans for Durable Object calls, outgoing `fetch`, and
-KV operations.
+Useful bounded attributes include provider names, commune coordinates, street-name batch sizes, and
+`http.response.status_code`. Cloudflare creates the binding-level spans for Durable Object calls, outgoing `fetch`,
+and KV operations; custom spans stay at the higher-level upstream operation boundary.
 
 Higher-level workflows remain named with `Effect.fn`, which improves Effect traces and failure stacks without
 creating an extra native span for every pure transformation. Unexpected causes are logged once at the Worker

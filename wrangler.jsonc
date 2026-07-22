@@ -12,15 +12,16 @@
     }
   ],
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 0.05,
+    "head_sampling_rate": 1,
     "traces": {
       "enabled": true,
-      "head_sampling_rate": 0.02
+      "head_sampling_rate": 1
     }
   },
   "limits": {
@@ -38,6 +39,13 @@
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD6CldUPZkyTMsi9",
     "SESSION_TTL": "30m",
     "CURSOR_TTL": "10m"
+  },
+  "secrets": {
+    "required": [
+      "TURNSTILE_SECRET_KEY",
+      "SESSION_SIGNING_SECRET",
+      "CURSOR_SIGNING_SECRET"
+    ]
   },
   "ratelimits": [
     {

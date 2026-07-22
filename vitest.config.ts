@@ -2,7 +2,6 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["worker/**/*.test.ts", "frontend/src/**/*.test.ts", "railway-redirect/**/*.test.ts"],
-    environment: "node",
+    projects: ["./vitest.unit.config.ts", "./vitest.workerd.config.ts"],
   },
 });

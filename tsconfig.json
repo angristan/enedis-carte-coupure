@@ -15,7 +15,7 @@
     "strictPropertyInitialization": true,
     "useUnknownInCatchVariables": true,
     "skipLibCheck": true,
-    "types": ["@cloudflare/workers-types", "vite/client", "node"]
+    "types": ["vite/client", "node", "@cloudflare/vitest-pool-workers/types"]
   },
   "include": [
     "frontend/src/**/*.ts",
@@ -24,6 +24,9 @@
     "worker/**/*.ts",
     "railway-redirect/**/*.ts",
     "vite.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.unit.config.ts",
+    "vitest.workerd.config.ts",
+    "worker-configuration.d.ts"
   ]
 }

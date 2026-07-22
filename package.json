@@ -9,12 +9,17 @@
     "build": "bun run test && bun run typecheck && vite build",
     "build:redirect": "tsc --project tsconfig.redirect.json",
     "preview": "vite preview --host 127.0.0.1",
-    "deploy": "bun run build && wrangler deploy --config web/enedis/wrangler.json",
+    "deploy": "bun run verify && wrangler deploy --config web/enedis/wrangler.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "test:unit": "vitest run --project unit",
+    "test:workerd": "vitest run --project workerd",
+    "cf-typegen": "wrangler types --config wrangler.jsonc",
+    "cf-typegen:check": "wrangler types --config wrangler.jsonc --check",
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run cf-typegen:check && bun run build && wrangler deploy --config web/enedis/wrangler.json --dry-run"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.97",
+    "effect": "4.0.0-beta.97",
     "lucide-react": "1.21.0",
     "maplibre-gl": "5.24.0",
     "react": "19.2.7",
@@ -22,16 +27,16 @@
     "react-map-gl": "8.1.1"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.42.4",
-    "@cloudflare/workers-types": "^4.20260630.1",
-    "@effect/vitest": "^4.0.0-beta.97",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@cloudflare/vite-plugin": "1.42.4",
+    "@cloudflare/vitest-pool-workers": "0.18.4",
+    "@effect/vitest": "4.0.0-beta.97",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite": "8.1.0",
-    "vitest": "^4.1.9",
-    "wrangler": "^4.106.0"
+    "vitest": "4.1.9",
+    "wrangler": "4.106.0"
   }
 }
