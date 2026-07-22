@@ -247,11 +247,8 @@ function program(
 ): Effect.Effect<Response> {
   return handleApi(request).pipe(
     Effect.provide(appLayer(env, context)),
-    Effect.flatMap((response) =>
-      response !== null ? Effect.succeed(response) : Effect.tryPromise({
-        try: (signal) => env.ASSETS.fetch(request, { signal }),
-        catch: () => new Response("asset request failed\n", { status: 500 }),
-      })
+    Effect.map((response) =>
+      response ?? new Response("Not found\n", { status: 404 })
     ),
     Effect.catch((error) =>
       Effect.succeed(error instanceof Response ? error : errorResponse(error))
