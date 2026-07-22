@@ -1,8 +1,11 @@
 import {
   type ChangeEvent,
   forwardRef,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useRef,
+  useState,
 } from "react";
 import {
   ChevronDown,
@@ -21,6 +24,19 @@ import {
   streetSummaryText,
 } from "../domain/streets.js";
 import { hasMapLayer } from "../map/geometry.js";
+import {
+  MOBILE_SHEET_DRAG_THRESHOLD,
+  mobileSheetPosition,
+  shouldOpenMobileSheet,
+} from "./mobileSheet.js";
+
+interface MobileSheetDrag {
+  readonly pointerId: number;
+  readonly startY: number;
+  readonly startTime: number;
+  readonly travel: number;
+  dragged: boolean;
+}
 
 interface SidePanelProps {
   readonly data: OutageResponse | null;
@@ -54,6 +70,13 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
     const communeCount = data?.communes?.length ?? data?.queries?.length;
     const communeTotal = data?.communeTotal ?? communeCount;
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const sidePaneRef = useRef<HTMLElement>(null);
+    const mobileDragRef = useRef<MobileSheetDrag | null>(null);
+    const suppressMobileClickUntilRef = useRef(0);
+    const [mobileDragPosition, setMobileDragPosition] = useState<number | null>(
+      null,
+    );
+    const [mobileDragging, setMobileDragging] = useState(false);
     const allStreets = data?.streets ?? [];
     const filterCounts: Record<StreetFilter, number> = {
       all: allStreets.length,
@@ -66,6 +89,84 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
     };
     const handleQueryChange = (event: ChangeEvent<HTMLInputElement>): void => {
       onQueryChange(event.target.value);
+    };
+    const handleMobilePointerDown = (
+      event: ReactPointerEvent<HTMLButtonElement>,
+    ): void => {
+      if (!event.isPrimary || event.button !== 0) return;
+      const panel = sidePaneRef.current;
+      if (panel === null) return;
+      const travel = Math.max(
+        0,
+        panel.offsetHeight - event.currentTarget.offsetHeight,
+      );
+      if (travel === 0) return;
+
+      suppressMobileClickUntilRef.current = 0;
+      mobileDragRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startTime: event.timeStamp,
+        travel,
+        dragged: false,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    };
+    const handleMobilePointerMove = (
+      event: ReactPointerEvent<HTMLButtonElement>,
+    ): void => {
+      const drag = mobileDragRef.current;
+      if (drag === null || drag.pointerId !== event.pointerId) return;
+      const deltaY = event.clientY - drag.startY;
+      if (!drag.dragged && Math.abs(deltaY) < MOBILE_SHEET_DRAG_THRESHOLD) {
+        return;
+      }
+
+      drag.dragged = true;
+      event.preventDefault();
+      setMobileDragging(true);
+      setMobileDragPosition(
+        mobileSheetPosition(mobileOpen, drag.travel, deltaY),
+      );
+    };
+    const finishMobileDrag = (
+      event: ReactPointerEvent<HTMLButtonElement>,
+      canceled: boolean,
+    ): void => {
+      const drag = mobileDragRef.current;
+      if (drag === null || drag.pointerId !== event.pointerId) return;
+      mobileDragRef.current = null;
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      if (drag.dragged && !canceled) {
+        const deltaY = event.clientY - drag.startY;
+        const position = mobileSheetPosition(mobileOpen, drag.travel, deltaY);
+        const elapsed = Math.max(1, event.timeStamp - drag.startTime);
+        const shouldOpen = shouldOpenMobileSheet({
+          position,
+          travel: drag.travel,
+          velocityY: deltaY / elapsed,
+          distanceY: deltaY,
+        });
+        suppressMobileClickUntilRef.current = event.timeStamp + 100;
+        if (shouldOpen !== mobileOpen) onMobileToggle();
+      }
+
+      setMobileDragging(false);
+      setMobileDragPosition(null);
+    };
+    const handleMobileClick = (
+      event: ReactMouseEvent<HTMLButtonElement>,
+    ): void => {
+      if (event.timeStamp <= suppressMobileClickUntilRef.current) {
+        suppressMobileClickUntilRef.current = 0;
+        event.preventDefault();
+        return;
+      }
+      onMobileToggle();
     };
 
     useEffect(() => {
@@ -81,7 +182,15 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
 
     return (
       <aside
-        className={mobileOpen ? "side-pane mobile-open" : "side-pane"}
+        ref={sidePaneRef}
+        className={[
+          "side-pane",
+          mobileOpen ? "mobile-open" : "",
+          mobileDragging ? "mobile-dragging" : "",
+        ].filter(Boolean).join(" ")}
+        style={mobileDragPosition === null
+          ? undefined
+          : { transform: `translateY(${mobileDragPosition}px)` }}
         aria-label="Détails des coupures"
       >
         <button
@@ -89,7 +198,11 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
           type="button"
           aria-controls="outage-details-content"
           aria-expanded={mobileOpen}
-          onClick={onMobileToggle}
+          onClick={handleMobileClick}
+          onPointerDown={handleMobilePointerDown}
+          onPointerMove={handleMobilePointerMove}
+          onPointerUp={(event) => finishMobileDrag(event, false)}
+          onPointerCancel={(event) => finishMobileDrag(event, true)}
         >
           <span className="mobile-sheet-handle" aria-hidden="true" />
           <span className="mobile-sheet-summary">

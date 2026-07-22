@@ -1045,6 +1045,10 @@ button {
     transform: translateY(0);
   }
 
+  .side-pane.mobile-dragging {
+    transition: none;
+  }
+
   .mobile-sheet-toggle {
     position: relative;
     display: grid;
@@ -1060,7 +1064,13 @@ button {
     background: #fff;
     border: 0;
     border-bottom: 1px solid transparent;
-    cursor: pointer;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .mobile-dragging .mobile-sheet-toggle {
+    cursor: grabbing;
   }
 
   .mobile-open .mobile-sheet-toggle {
@@ -1140,7 +1150,8 @@ button {
     transition: visibility 0s linear 220ms;
   }
 
-  .mobile-open .side-content {
+  .mobile-open .side-content,
+  .mobile-dragging .side-content {
     visibility: visible;
     transition-delay: 0s;
   }
