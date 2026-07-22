@@ -222,7 +222,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         style={{ width: "100%", height: "100%" }}
         touchPitch={false}
       >
-        <NavigationControl position="bottom-left" showCompass={false} />
+        <NavigationControl position="bottom-right" showCompass={false} />
         {areaGeoJson !== undefined && areaGeoJson.features.length > 0
           ? (
             <Source

@@ -17,22 +17,30 @@ export function StatsStrip({ stats }: StatsStripProps) {
     <div className="stats-strip" aria-live="polite">
       <Stat
         icon={MapPinned}
-        label="rues"
+        label="Rues touchées"
+        tone="teal"
         value={formatNumber(stats?.streets)}
       />
       <Stat
         icon={AlertTriangle}
-        label="coupures"
+        label="Coupures"
+        tone="red"
         value={formatNumber(stats?.outages)}
       />
       <Stat
         icon={RadioTower}
-        label="HTA"
+        label="Incidents HTA"
+        tone="red"
         value={formatNumber(
           (stats?.compteurIncidentHTA ?? 0) + (stats?.compteurTravauxHTA ?? 0),
         )}
       />
-      <Stat icon={Zap} label="BT" value={formatNumber(stats?.compteurBT)} />
+      <Stat
+        icon={Zap}
+        label="Incidents BT"
+        tone="orange"
+        value={formatNumber(stats?.compteurBT)}
+      />
     </div>
   );
 }
@@ -41,14 +49,19 @@ interface StatProps {
   readonly icon: LucideIcon;
   readonly value: string;
   readonly label: string;
+  readonly tone: "teal" | "red" | "orange";
 }
 
-function Stat({ icon: Icon, value, label }: StatProps) {
+function Stat({ icon: Icon, value, label, tone }: StatProps) {
   return (
-    <div className="stat-tile">
-      <Icon size={17} aria-hidden="true" />
-      <span>{value}</span>
-      <small>{label}</small>
+    <div className={`stat-tile ${tone}`}>
+      <span className="stat-icon" aria-hidden="true">
+        <Icon size={18} />
+      </span>
+      <span>
+        <strong>{value}</strong>
+        <small>{label}</small>
+      </span>
     </div>
   );
 }

@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { RotateCw, Zap } from "lucide-react";
+import { ChevronLeft, ChevronRight, RotateCw, Zap } from "lucide-react";
 import type { OutageResponse, Street } from "../../shared/api.js";
 import { viewportIsWithinLimits } from "../../shared/viewport.js";
 import {
@@ -15,6 +15,7 @@ import {
   runTurnstileVerification,
 } from "./api/client.js";
 import { SidePanel } from "./components/SidePanel.js";
+import { StatsStrip } from "./components/StatsStrip.js";
 import { TurnstileGate } from "./components/TurnstileGate.js";
 import {
   buildStatusText,
@@ -51,6 +52,13 @@ export function App() {
   const [sessionVerified, setSessionVerified] = useState(false);
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [desktopExplorerOpen, setDesktopExplorerOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("enedis:explorer-open") !== "false";
+    } catch {
+      return true;
+    }
+  });
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionAbortRef = useRef<AbortController | null>(null);
@@ -200,6 +208,17 @@ export function App() {
   }, [mobilePanelOpen]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "enedis:explorer-open",
+        String(desktopExplorerOpen),
+      );
+    } catch {
+      // The explorer remains usable when browser storage is unavailable.
+    }
+  }, [desktopExplorerOpen]);
+
+  useEffect(() => {
     if (activeKey.length === 0) return;
     const selected = listRef.current?.querySelector(
       `[data-street-key="${CSS.escape(activeKey)}"]`,
@@ -249,81 +268,114 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="map-pane" aria-label="Carte des rues touchées">
-        <MapView
-          ref={mapRef}
+      <header className="map-topbar">
+        <div className="brand-panel">
+          <span className="brand-mark" aria-hidden="true">
+            <Zap size={21} strokeWidth={2.4} />
+          </span>
+          <div className="brand-copy">
+            <h1>Enedis <em>Signal</em></h1>
+            <div className="brand-kicker">
+              <span className={loading ? "status-dot loading" : "status-dot"} />
+              <span>{loading ? "Mise à jour en cours" : "Coupures en direct"}</span>
+            </div>
+            <p>{status}</p>
+          </div>
+        </div>
+
+        <StatsStrip stats={data?.stats} />
+
+        <div className="map-actions" aria-label="Actions de la carte">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            title="Rafraîchir la vue"
+            aria-label="Rafraîchir la vue"
+          >
+            <RotateCw
+              size={20}
+              aria-hidden="true"
+              className={loading ? "spin" : ""}
+            />
+          </button>
+          <a
+            href="https://github.com/angristan/enedis"
+            target="_blank"
+            rel="noreferrer"
+            title="Voir le dépôt GitHub"
+            aria-label="Voir le dépôt GitHub"
+          >
+            <GitHubLogo />
+          </a>
+        </div>
+      </header>
+
+      <section
+        className="workspace"
+        data-explorer-open={desktopExplorerOpen}
+      >
+        <section className="map-pane" aria-label="Carte des rues touchées">
+          <MapView
+            ref={mapRef}
+            data={data}
+            streets={filteredStreets}
+            activeKey={activeKey}
+            onInteractionStart={handleInteractionStart}
+            onSelectStreet={setActiveKey}
+            onViewportChange={setViewport}
+          />
+          <div className="map-status-card" aria-live="polite">
+            <strong>Carte des coupures</strong>
+            <span>{status}</span>
+          </div>
+          <div className="outage-map-legend" aria-label="Légende des incidents">
+            <span><i className="legend-dot hta" />HTA · moyenne tension</span>
+            <span><i className="legend-dot bt" />BT · basse tension</span>
+          </div>
+          <button
+            type="button"
+            className="explorer-edge-toggle"
+            aria-controls="outage-details-content"
+            aria-expanded={desktopExplorerOpen}
+            aria-label={desktopExplorerOpen
+              ? "Masquer l’explorateur des coupures"
+              : "Afficher l’explorateur des coupures"}
+            title={desktopExplorerOpen
+              ? "Masquer l’explorateur"
+              : "Afficher l’explorateur"}
+            onClick={() => setDesktopExplorerOpen((open) => !open)}
+          >
+            {desktopExplorerOpen
+              ? <ChevronLeft size={21} aria-hidden="true" />
+              : <ChevronRight size={21} aria-hidden="true" />}
+          </button>
+        </section>
+
+        {mobilePanelOpen
+          ? (
+            <button
+              className="mobile-sheet-backdrop"
+              type="button"
+              aria-label="Fermer la liste des rues"
+              onClick={() => setMobilePanelOpen(false)}
+            />
+          )
+          : null}
+        <SidePanel
+          ref={listRef}
           data={data}
           streets={filteredStreets}
           activeKey={activeKey}
-          onInteractionStart={handleInteractionStart}
-          onSelectStreet={setActiveKey}
-          onViewportChange={setViewport}
+          activeFilter={activeFilter}
+          query={query}
+          mobileOpen={mobilePanelOpen}
+          onMobileToggle={() => setMobilePanelOpen((open) => !open)}
+          onFilterChange={setActiveFilter}
+          onQueryChange={setQuery}
+          onSelectStreet={handleListSelect}
         />
-
-        <header className="map-topbar">
-          <div className="brand-panel">
-            <span className="brand-mark" aria-hidden="true">
-              <Zap size={19} strokeWidth={2.4} />
-            </span>
-            <div className="brand-copy">
-              <div className="brand-kicker">
-                <span className={loading ? "status-dot loading" : "status-dot"} />
-                <span>{loading ? "Mise à jour en cours" : "Réseau en direct"}</span>
-              </div>
-              <h1>Carte des coupures</h1>
-              <p>{status}</p>
-            </div>
-          </div>
-          <div className="map-actions" aria-label="Actions de la carte">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              title="Rafraîchir la vue"
-              aria-label="Rafraîchir la vue"
-            >
-              <RotateCw
-                size={20}
-                aria-hidden="true"
-                className={loading ? "spin" : ""}
-              />
-            </button>
-            <a
-              href="https://github.com/angristan/enedis"
-              target="_blank"
-              rel="noreferrer"
-              title="Voir le repo GitHub"
-              aria-label="Voir le repo GitHub"
-            >
-              <GitHubLogo />
-            </a>
-          </div>
-        </header>
-
       </section>
 
-      {mobilePanelOpen
-        ? (
-          <button
-            className="mobile-sheet-backdrop"
-            type="button"
-            aria-label="Fermer la liste des rues"
-            onClick={() => setMobilePanelOpen(false)}
-          />
-        )
-        : null}
-      <SidePanel
-        ref={listRef}
-        data={data}
-        streets={filteredStreets}
-        activeKey={activeKey}
-        activeFilter={activeFilter}
-        query={query}
-        mobileOpen={mobilePanelOpen}
-        onMobileToggle={() => setMobilePanelOpen((open) => !open)}
-        onFilterChange={setActiveFilter}
-        onQueryChange={setQuery}
-        onSelectStreet={handleListSelect}
-      />
       {sessionChecked && !sessionVerified && turnstileSiteKey.length > 0
         ? (
           <TurnstileGate

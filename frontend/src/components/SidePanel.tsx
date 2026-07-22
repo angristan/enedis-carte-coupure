@@ -5,11 +5,8 @@ import {
   useRef,
 } from "react";
 import {
-  Activity,
   ChevronDown,
   ChevronRight,
-  Clock3,
-  type LucideIcon,
   List,
   MapPinned,
   Search,
@@ -109,16 +106,12 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
         <div id="outage-details-content" className="side-content">
           <div className="side-header">
             <div className="side-heading">
-              <p className="eyebrow">
-                <Activity size={13} aria-hidden="true" />
-                Veille réseau
-              </p>
-              <h2><strong>{formatNumber(allStreets.length)}</strong> rues touchées</h2>
-              <p className="side-subtitle">dans la zone affichée</p>
+              <p className="eyebrow">Explorer</p>
+              <h2>Rues touchées</h2>
             </div>
-            <p className="source-badge">
-              Source&nbsp;: Enedis<span> · service non officiel</span>
-            </p>
+            <span className="result-count">
+              {formatNumber(streets.length)} / {formatNumber(allStreets.length)}
+            </span>
           </div>
 
           <label className="search-box">
@@ -128,7 +121,7 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
               ref={searchInputRef}
               value={query}
               type="search"
-              placeholder="Rechercher une rue, une commune..."
+              placeholder="Rechercher une rue ou une commune"
               autoComplete="off"
               onChange={handleQueryChange}
             />
@@ -141,26 +134,16 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
             onChange={onFilterChange}
           />
 
-          <div className="insight-grid" aria-label="Résumé">
-            <Insight
-              icon={MapPinned}
-              label="Zone analysée"
-              value={communeCount !== undefined && communeTotal !== undefined &&
+          <div className="explorer-meta" aria-label="Périmètre des résultats">
+            <span>
+              {communeCount !== undefined && communeTotal !== undefined &&
                   communeCount < communeTotal
                 ? `${formatNumber(communeCount)} / ${formatNumber(communeTotal)} communes`
                 : `${formatNumber(communeCount)} commune${communeCount === 1 ? "" : "s"}`}
-            />
-            <Insight
-              icon={Clock3}
-              label="Actualisation"
-              value={formatTime(data?.updatedAt)}
-            />
-          </div>
-
-          <Legend />
-          <div className="list-heading">
-            <span>Rues signalées</span>
-            <strong>{formatNumber(streets.length)}</strong>
+            </span>
+            <span>{data === null
+              ? "Actualisation en attente"
+              : `Actualisé à ${formatTime(data.updatedAt)}`}</span>
           </div>
           <StreetList
             ref={ref}
@@ -168,6 +151,9 @@ export const SidePanel = forwardRef<HTMLDivElement, SidePanelProps>(
             streets={streets}
             onSelectStreet={onSelectStreet}
           />
+          <footer className="source-badge">
+            Service non officiel · Données Enedis
+          </footer>
         </div>
       </aside>
     );
@@ -202,38 +188,6 @@ function SegmentedFilter(
           <small>{formatNumber(counts[value])}</small>
         </button>
       ))}
-    </div>
-  );
-}
-
-interface InsightProps {
-  readonly icon: LucideIcon;
-  readonly label: string;
-  readonly value: string;
-}
-
-function Insight({ icon: Icon, label, value }: InsightProps) {
-  return (
-    <div className="insight">
-      <Icon size={16} aria-hidden="true" />
-      <span>{label}</span>
-      <strong>{value || "-"}</strong>
-    </div>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="legend" aria-label="Légende des incidents">
-      <div className="legend-item">
-        <strong><span className="legend-dot hta" />HTA</strong>
-        <span>Moyenne tension</span>
-      </div>
-      <div className="legend-item">
-        <strong><span className="legend-dot bt" />BT</strong>
-        <span>Basse tension</span>
-      </div>
-      <p>Les tracés colorés indiquent les rues concernées.</p>
     </div>
   );
 }
