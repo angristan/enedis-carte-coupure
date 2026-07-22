@@ -37,7 +37,7 @@ The Worker deployment includes:
 - the React build as Workers Static Assets;
 - the `CACHE` Workers KV binding;
 - the `UPSTREAM_COORDINATOR` SQLite Durable Object;
-- the `API_RATE_LIMITER` binding at approximately 60 requests per minute per verified session and Cloudflare
+- the `API_RATE_LIMITER` binding at approximately 120 requests per minute per verified session and Cloudflare
   location;
 - the managed pre-clearance Turnstile widget for `enedis.stanislas.cloud`;
 - the `enedis.stanislas.cloud` Custom Domain;
