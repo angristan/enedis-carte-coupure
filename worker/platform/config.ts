@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
-export type WorkerEnv = Pick<Env, "ASSETS"> & Partial<Omit<Env, "ASSETS">>;
+export type WorkerEnv = Partial<Env>;
 
 export class WorkerConfig extends Context.Service<WorkerConfig, {
   readonly cachePrefix: string;

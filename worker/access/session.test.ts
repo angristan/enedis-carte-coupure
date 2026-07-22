@@ -38,13 +38,6 @@ const baseConfig = {
   cursorTtl: 600,
 };
 
-const unusedAssets: Fetcher = {
-  fetch: () => Promise.resolve(new Response()),
-  connect: () => {
-    throw new Error("unused test binding");
-  },
-};
-
 const allowingRateLimiter: RateLimit = {
   limit: () => Promise.resolve({ success: true }),
 };
@@ -64,8 +57,8 @@ const validTurnstileResponse = {
 };
 
 function environment(rateLimiter: RateLimit | undefined): WorkerEnv {
-  if (rateLimiter === undefined) return { ASSETS: unusedAssets };
-  return { ASSETS: unusedAssets, API_RATE_LIMITER: rateLimiter };
+  if (rateLimiter === undefined) return {};
+  return { API_RATE_LIMITER: rateLimiter };
 }
 
 function makeAccessLayer(
